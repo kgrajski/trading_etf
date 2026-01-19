@@ -8,6 +8,8 @@ Aggregates daily OHLCV data into weekly summaries with derived metrics:
 - L1 (Derived): Log-transformed single-week metrics (log_return, log_range, etc.)
 - L2 (Temporal): Multi-week rolling/smoothed metrics (momentum, MAs, etc.)
 
+Processes both target ETFs and macro symbols uniformly.
+
 For complete feature documentation including formulas and interpretations,
 see: docs/FEATURES.md
 
@@ -18,7 +20,8 @@ Output: data/historical/{tier}/weekly/*.csv, _manifest.json
 import json
 import os
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 import pandas as pd
@@ -27,10 +30,13 @@ from src.workflow.config import (
     DATA_TIER,
     FEATURES_ENABLED,
     LOOKBACK_PERIODS,
+    MACRO_SYMBOL_CATEGORIES,
+    MACRO_SYMBOL_LIST,
     SYMBOL_PREFIX_FILTER,
 )
 from src.workflow.workflow_utils import (
     get_historical_dir,
+    get_metadata_dir,
     print_summary,
     setup_logging,
     workflow_script,
@@ -39,8 +45,96 @@ from src.workflow.workflow_utils import (
 logger = setup_logging()
 
 
+def load_fetch_manifest(metadata_dir: Path) -> Dict[str, Any]:
+    """Load fetch manifest to get symbol categories.
+
+    Args:
+        metadata_dir: Path to metadata directory
+
+    Returns:
+        Fetch manifest dictionary, or empty dict if not found
+    """
+    manifest_path = metadata_dir / "fetch_manifest.json"
+    if manifest_path.exists():
+        with open(manifest_path, "r") as f:
+            return json.load(f)
+    return {}
+
+
+def get_symbol_category(symbol: str, fetch_manifest: Dict[str, Any]) -> str:
+    """Get category for a symbol.
+
+    Priority:
+    1. From fetch_manifest categories
+    2. From MACRO_SYMBOL_CATEGORIES config
+    3. Default to "target"
+
+    Args:
+        symbol: Symbol to look up
+        fetch_manifest: Loaded fetch manifest
+
+    Returns:
+        Category string (e.g., "target", "volatility", "treasury")
+    """
+    # Check fetch manifest first
+    categories = fetch_manifest.get("categories", {})
+    if symbol in categories:
+        return categories[symbol]
+
+    # Check macro symbols from config
+    if symbol in MACRO_SYMBOL_CATEGORIES:
+        return MACRO_SYMBOL_CATEGORIES[symbol]
+
+    # Default to target
+    return "target"
+
+
+def get_symbols_to_process(
+    input_dir: Path, fetch_manifest: Dict[str, Any]
+) -> List[Path]:
+    """Get list of CSV files to process.
+
+    Applies SYMBOL_PREFIX_FILTER to target ETFs only.
+    Macro symbols are always processed.
+
+    Args:
+        input_dir: Directory containing daily CSV files
+        fetch_manifest: Loaded fetch manifest
+
+    Returns:
+        List of CSV file paths to process
+    """
+    all_csv_files = sorted(input_dir.glob("*.csv"))
+
+    # Get list of macro symbols
+    macro_symbols: Set[str] = set(MACRO_SYMBOL_LIST)
+
+    # Also check fetch manifest
+    if "macro_symbols" in fetch_manifest:
+        macro_symbols.update(fetch_manifest["macro_symbols"])
+
+    if SYMBOL_PREFIX_FILTER:
+        # Apply filter to targets only, always include macros
+        csv_files = [
+            f
+            for f in all_csv_files
+            if f.stem.startswith(SYMBOL_PREFIX_FILTER) or f.stem in macro_symbols
+        ]
+    else:
+        csv_files = all_csv_files
+
+    return csv_files
+
+
 def load_daily_data(filepath: str) -> Optional[pd.DataFrame]:
-    """Load daily bar data from CSV."""
+    """Load daily bar data from CSV.
+
+    Args:
+        filepath: Path to CSV file
+
+    Returns:
+        DataFrame with daily data, or None if error
+    """
     try:
         df = pd.read_csv(filepath)
         df["date"] = pd.to_datetime(df["date"])
@@ -52,7 +146,16 @@ def load_daily_data(filepath: str) -> Optional[pd.DataFrame]:
 
 
 def compute_L0_base(daily_df: pd.DataFrame) -> pd.DataFrame:
-    """Compute L0 base weekly aggregates."""
+    """Compute L0 base weekly aggregates.
+
+    Aggregates daily OHLCV data into weekly bars using ISO week calendar.
+
+    Args:
+        daily_df: DataFrame with daily bars
+
+    Returns:
+        DataFrame with weekly aggregates
+    """
     df = daily_df.copy()
     df["iso_year"] = df["date"].dt.isocalendar().year
     df["iso_week"] = df["date"].dt.isocalendar().week
@@ -95,7 +198,17 @@ def compute_L0_base(daily_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_L1_derived(weekly_df: pd.DataFrame, daily_df: pd.DataFrame) -> pd.DataFrame:
-    """Compute L1 derived single-week metrics."""
+    """Compute L1 derived single-week metrics.
+
+    These are log-transformed features for better statistical properties.
+
+    Args:
+        weekly_df: DataFrame with weekly aggregates
+        daily_df: Original daily data for volatility calculation
+
+    Returns:
+        DataFrame with L1 features added
+    """
     df = weekly_df.copy()
 
     if FEATURES_ENABLED.get("L1_log_return"):
@@ -133,7 +246,16 @@ def compute_L1_derived(weekly_df: pd.DataFrame, daily_df: pd.DataFrame) -> pd.Da
 
 
 def compute_L2_temporal(weekly_df: pd.DataFrame) -> pd.DataFrame:
-    """Compute L2 temporal multi-week metrics."""
+    """Compute L2 temporal multi-week metrics.
+
+    These are rolling/smoothed features using lookback windows.
+
+    Args:
+        weekly_df: DataFrame with L0 and L1 features
+
+    Returns:
+        DataFrame with L2 features added
+    """
     df = weekly_df.copy()
     df = df.sort_values("week_start").reset_index(drop=True)
 
@@ -188,7 +310,12 @@ def compute_L2_temporal(weekly_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def save_weekly_data(df: pd.DataFrame, output_path: str) -> None:
-    """Save weekly data to CSV."""
+    """Save weekly data to CSV.
+
+    Args:
+        df: DataFrame with weekly features
+        output_path: Path to output CSV
+    """
     df_out = df.copy()
     df_out["week_start"] = df_out["week_start"].dt.strftime("%Y-%m-%d")
     df_out["week_end"] = df_out["week_end"].dt.strftime("%Y-%m-%d")
@@ -199,6 +326,7 @@ def save_weekly_data(df: pd.DataFrame, output_path: str) -> None:
 def main() -> None:
     """Main workflow function."""
     # Configuration
+    metadata_dir = get_metadata_dir()
     input_dir = get_historical_dir(DATA_TIER) / "daily"
     output_dir = get_historical_dir(DATA_TIER) / "weekly"
     os.makedirs(output_dir, exist_ok=True)
@@ -208,7 +336,7 @@ def main() -> None:
 
     print("Configuration:")
     print(f"  Data tier: {DATA_TIER}")
-    print(f"  Symbol filter: {SYMBOL_PREFIX_FILTER or 'None (all symbols)'}")
+    print(f"  Symbol filter (targets only): {SYMBOL_PREFIX_FILTER or 'None'}")
     print(f"  Input: {input_dir}")
     print(f"  Output: {output_dir}")
     print(f"  L1 features: {len(l1_features)}")
@@ -222,12 +350,25 @@ def main() -> None:
         logger.error("Please run 02-fetch-daily-data.py first.")
         return
 
-    csv_files = sorted(input_dir.glob("*.csv"))
+    # Load fetch manifest for category info
+    fetch_manifest = load_fetch_manifest(metadata_dir)
 
-    if SYMBOL_PREFIX_FILTER:
-        csv_files = [f for f in csv_files if f.stem.startswith(SYMBOL_PREFIX_FILTER)]
+    # Get symbols to process (applies filter to targets only)
+    csv_files = get_symbols_to_process(input_dir, fetch_manifest)
+
+    # Count by category
+    target_count = 0
+    macro_count = 0
+    for f in csv_files:
+        cat = get_symbol_category(f.stem, fetch_manifest)
+        if cat == "target":
+            target_count += 1
+        else:
+            macro_count += 1
 
     print(f"Found {len(csv_files)} daily CSV files to process")
+    print(f"  Target ETFs: {target_count}")
+    print(f"  Macro symbols: {macro_count}")
     print("-" * 80)
 
     if not csv_files:
@@ -242,6 +383,13 @@ def main() -> None:
         "features_enabled": {"L1": l1_features, "L2": l2_features},
         "lookback_periods": LOOKBACK_PERIODS,
         "symbols": {},
+        "categories": {
+            "target": [],
+            "volatility": [],
+            "treasury": [],
+            "dollar": [],
+            "commodities": [],
+        },
     }
 
     success_count = 0
@@ -250,7 +398,9 @@ def main() -> None:
 
     for i, csv_file in enumerate(csv_files, 1):
         symbol = csv_file.stem
-        print(f"[{i}/{len(csv_files)}] {symbol}...", end=" ")
+        category = get_symbol_category(symbol, fetch_manifest)
+        category_indicator = f"[{category.upper()[:3]}]"
+        print(f"[{i}/{len(csv_files)}] {symbol} {category_indicator}...", end=" ")
 
         daily_df = load_daily_data(str(csv_file))
         if daily_df is None or daily_df.empty:
@@ -271,7 +421,14 @@ def main() -> None:
             "weeks": weeks_count,
             "first_week": weekly_df["week_start"].min().strftime("%Y-%m-%d"),
             "last_week": weekly_df["week_start"].max().strftime("%Y-%m-%d"),
+            "category": category,
         }
+
+        # Track by category
+        if category in manifest["categories"]:
+            manifest["categories"][category].append(symbol)
+        else:
+            manifest["categories"][category] = [symbol]
 
         print(f"✓ {weeks_count} weeks")
         success_count += 1
@@ -280,6 +437,13 @@ def main() -> None:
     manifest_path = output_dir / "_manifest.json"
     manifest["symbols_processed"] = success_count
     manifest["total_weeks"] = total_weeks
+    manifest["target_count"] = len(manifest["categories"].get("target", []))
+    manifest["macro_count"] = (
+        len(manifest["categories"].get("volatility", []))
+        + len(manifest["categories"].get("treasury", []))
+        + len(manifest["categories"].get("dollar", []))
+        + len(manifest["categories"].get("commodities", []))
+    )
 
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
@@ -287,6 +451,8 @@ def main() -> None:
     # Summary
     print_summary(
         symbols_processed=success_count,
+        target_etfs=manifest["target_count"],
+        macro_symbols=manifest["macro_count"],
         failed=fail_count,
         total_weeks_derived=total_weeks,
         output_directory=str(output_dir),

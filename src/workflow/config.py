@@ -6,7 +6,7 @@ All configurable parameters in one place for easy modification.
 Individual scripts can override these as needed.
 """
 
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 # =============================================================================
 # DATA TIER CONFIGURATION
@@ -147,3 +147,87 @@ VIZ_COLORS = {
 
 # Rate limiting for API requests (seconds between calls)
 API_DELAY_SECONDS: float = 0.3
+
+# =============================================================================
+# MACRO SYMBOL CONFIGURATION
+# =============================================================================
+# These ETFs serve as proxies for futures markets not directly available via Alpaca.
+# They are used as FEATURES only (not prediction targets).
+#
+# Categories:
+#   - volatility: VIX futures proxies measuring market fear/uncertainty
+#   - treasury: Interest rate sensitivity proxies for yield curve dynamics
+#   - dollar: Currency proxy for dollar strength
+#   - commodities: Cross-asset signals (safe-haven, energy)
+
+MACRO_SYMBOLS = {
+    "volatility": {
+        # VIX futures proxies - measure market fear/uncertainty
+        # VIXY tracks short-term VIX futures (1-2 month), sensitive to near-term vol
+        "VIXY": "ProShares VIX Short-Term Futures ETF",
+        # VIXM tracks mid-term VIX futures (4-7 month), less sensitive to daily moves
+        "VIXM": "ProShares VIX Mid-Term Futures ETF",
+    },
+    "treasury": {
+        # Interest rate sensitivity proxies - yield curve dynamics
+        # Duration indicates sensitivity to rate changes (higher = more sensitive)
+        "TLT": "iShares 20+ Year Treasury Bond ETF (long duration ~17yr)",
+        "IEF": "iShares 7-10 Year Treasury Bond ETF (intermediate ~7.5yr)",
+        "SHY": "iShares 1-3 Year Treasury Bond ETF (short duration ~2yr)",
+        # BIL tracks ultra-short T-bills, nearly no rate sensitivity
+        "BIL": "SPDR Bloomberg 1-3 Month T-Bill ETF (Fed Funds proxy)",
+        # TIP tracks inflation-protected securities, reflects real rate expectations
+        "TIP": "iShares TIPS Bond ETF (inflation-linked, real rate proxy)",
+    },
+    "dollar": {
+        # Currency proxy - dollar strength indicator
+        # UUP rises when dollar strengthens vs basket of major currencies
+        "UUP": "Invesco DB US Dollar Index Bullish Fund",
+    },
+    "commodities": {
+        # Cross-asset signals for risk sentiment and sector dynamics
+        # GLD is classic safe-haven, rises during uncertainty/inflation fears
+        "GLD": "SPDR Gold Shares (safe-haven demand proxy)",
+        # USO tracks WTI crude oil, leading indicator for energy sector
+        "USO": "United States Oil Fund (energy sector indicator)",
+    },
+}
+
+# Flatten for iteration - list of all macro symbol tickers
+MACRO_SYMBOL_LIST: List[str] = [
+    sym for cat in MACRO_SYMBOLS.values() for sym in cat.keys()
+]
+
+# Map symbol to category for easy lookup
+MACRO_SYMBOL_CATEGORIES: dict = {
+    sym: cat for cat, symbols in MACRO_SYMBOLS.items() for sym in symbols.keys()
+}
+
+# =============================================================================
+# SPECIALIZED MACRO FEATURES
+# =============================================================================
+# Cross-symbol derived features computed from macro symbols.
+# Format: "feature_name": (symbol1, symbol2, operation)
+# Operations: "ratio" = log(sym1/sym2), "spread" = sym1 - sym2
+
+SPECIALIZED_MACRO_FEATURES = {
+    # VIX term structure: VIXY/VIXM ratio indicates contango (>1) or backwardation (<1)
+    # Contango = normal, futures > spot; Backwardation = fear, futures < spot
+    "vix_term_structure": ("VIXY", "VIXM", "ratio"),
+    # Yield curve slope: TLT/SHY ratio, falling = flattening/inversion (recession signal)
+    "yield_curve_slope": ("TLT", "SHY", "ratio"),
+    # Real rate proxy: TLT-TIP spread, higher = lower inflation expectations
+    "real_rate_proxy": ("TLT", "TIP", "spread"),
+}
+
+# =============================================================================
+# INCREMENTAL UPDATE CONFIGURATION
+# =============================================================================
+
+# Incremental mode: True = only fetch new data since last update
+# False = full refresh from DATE_RANGE_START
+INCREMENTAL_MODE: bool = True
+
+# When in incremental mode, re-fetch last N days to catch any corrections
+# or late-arriving data adjustments (e.g., adjusted close recalculations)
+LOOKBACK_BUFFER_DAYS: int = 5
