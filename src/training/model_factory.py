@@ -5,16 +5,31 @@ from typing import Any, Dict, List
 from src.training.models.base import BaseModel
 from src.training.models.linear import LassoModel, LinearModel, RidgeModel
 from src.training.models.tree import RandomForestModel, XGBoostModel
+from src.training.models.classification import (
+    LogisticModel,
+    RandomForestClassifierModel,
+    XGBoostClassifierModel,
+)
 
 
-# Registry of available models
-MODEL_REGISTRY: Dict[str, type] = {
+# Registry of available regression models
+REGRESSION_REGISTRY: Dict[str, type] = {
     "linear": LinearModel,
     "ridge": RidgeModel,
     "lasso": LassoModel,
     "random_forest": RandomForestModel,
     "xgboost": XGBoostModel,
 }
+
+# Registry of available classification models
+CLASSIFICATION_REGISTRY: Dict[str, type] = {
+    "logistic": LogisticModel,
+    "rf_classifier": RandomForestClassifierModel,
+    "xgb_classifier": XGBoostClassifierModel,
+}
+
+# Combined registry
+MODEL_REGISTRY: Dict[str, type] = {**REGRESSION_REGISTRY, **CLASSIFICATION_REGISTRY}
 
 
 def create_model(model_type: str, **kwargs: Any) -> BaseModel:
@@ -49,9 +64,18 @@ def list_models() -> List[str]:
 
 
 def get_default_models() -> List[str]:
-    """Get the default set of models for baseline experiments.
+    """Get the default set of regression models for baseline experiments.
     
     Returns:
         List of model types to use in baseline experiments
     """
     return ["linear", "ridge", "lasso", "random_forest", "xgboost"]
+
+
+def get_default_classifiers() -> List[str]:
+    """Get the default set of classification models.
+    
+    Returns:
+        List of classifier types to use in classification experiments
+    """
+    return ["logistic", "rf_classifier", "xgb_classifier"]
