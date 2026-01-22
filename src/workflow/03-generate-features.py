@@ -212,7 +212,14 @@ def compute_L1_derived(weekly_df: pd.DataFrame, daily_df: pd.DataFrame) -> pd.Da
     df = weekly_df.copy()
 
     if FEATURES_ENABLED.get("L1_log_return"):
-        df["log_return"] = np.log(df["close"] / df["open"].replace(0, np.nan))
+        # Week-over-week close-to-close return (primary return measure)
+        # This is what we predict: log(close_t / close_{t-1})
+        df["log_return"] = np.log(df["close"] / df["close"].shift(1).replace(0, np.nan))
+
+    if FEATURES_ENABLED.get("L1_log_return_intraweek"):
+        # Intra-week return: open to close within the same week
+        # May have predictive value for momentum/reversal patterns
+        df["log_return_intraweek"] = np.log(df["close"] / df["open"].replace(0, np.nan))
 
     if FEATURES_ENABLED.get("L1_log_range"):
         df["log_range"] = np.log(df["high"] / df["low"].replace(0, np.nan))

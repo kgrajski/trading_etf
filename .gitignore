@@ -37,17 +37,21 @@ env/
 .env
 .env.local
 
-# Data (all generated - can be regenerated from workflow scripts)
+# =============================================================================
+# Generated artifacts (reproducible by rerunning workflow scripts)
+# =============================================================================
+
+# Data - all generated from 02, 03, 04, 05 scripts
 /data/
 
-# Experiments
-experiments/*/results.json
-experiments/*/visualizations/
+# Experiments - all generated from 06, 07, 08 scripts
+/experiments/
 
-# Reports
-reports/*.html
-reports/*.png
-reports/*.csv
+# Reports - generated from 02b script
+/reports/
+
+# Logs - runtime output
+/logs/
 
 # Jupyter
 .ipynb_checkpoints/

@@ -20,21 +20,22 @@ DATA_TIER: str = "iex"
 # SYMBOL FILTERING
 # =============================================================================
 
-# MVP filter: Set to a prefix to limit symbols (e.g., "X" for testing)
-# Set to None to process all symbols
-SYMBOL_PREFIX_FILTER: Optional[str] = "X"
+# Symbol prefix filter: Set to a prefix to limit symbols (e.g., "X" for testing)
+# Set to None to process all symbols from the filtered universe
+# NOTE: Macro symbols are NEVER filtered by prefix (always included)
+SYMBOL_PREFIX_FILTER: Optional[str] = None  # None = all symbols
 
 # =============================================================================
 # DATE RANGE CONFIGURATION
 # =============================================================================
 
 # Historical date range for data fetching
-# Set to None for dynamic calculation
-DATE_RANGE_START: Optional[str] = "2024-01-01"
+# 5 years of history for coverage analysis
+DATE_RANGE_START: Optional[str] = "2021-01-01"
 DATE_RANGE_END: Optional[str] = None  # None = today
 
 # Years of history to fetch if DATE_RANGE_START is None
-YEARS_OF_HISTORY: int = 2
+YEARS_OF_HISTORY: int = 5
 
 # =============================================================================
 # EXCHANGE FILTERING (Script 01)
@@ -72,7 +73,8 @@ LEVERAGED_INVERSE_PATTERNS: List[str] = [
 
 # Features to derive from daily data
 FEATURES_L1 = {
-    "L1_log_return": True,
+    "L1_log_return": True,  # Week-over-week close-to-close return
+    "L1_log_return_intraweek": True,  # Intra-week open-to-close return
     "L1_log_range": True,
     "L1_log_volume": True,
     "L1_log_avg_daily_volume": True,

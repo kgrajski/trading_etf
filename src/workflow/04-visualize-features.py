@@ -162,8 +162,8 @@ def create_dashboard(
         subplot_titles=(
             "<b>Price</b><br><sup>Weekly close with high/low range</sup>",
             "<b>Volume</b><br><sup>Weekly trading volume (millions)</sup>",
-            "<b>Returns</b><br><sup>log(close/open) with 4w & 12w MA</sup>",
-            "<b>Momentum</b><br><sup>log(close_t / close_t-n)</sup>",
+            "<b>Returns</b><br><sup>Week-over-week: log(close_t / close_{t-1})</sup>",
+            "<b>Momentum</b><br><sup>log(close_t / close_{t-n})</sup>",
             "<b>Volatility</b><br><sup>Std of daily log returns</sup>",
             "<b>Volume Change</b><br><sup>Week-over-week log volume delta</sup>",
         ),
@@ -524,12 +524,16 @@ def create_inspector_html(
                          color: #666; font-size: 0.8em; background: rgba(0,0,0,0.7);
                          padding: 5px 15px; border-radius: 20px; }}
         .keyboard-help kbd {{ background: #333; padding: 2px 6px; border-radius: 3px; margin: 0 2px; }}
+        .view-toggle {{ background: #28a745; padding: 8px 15px; border-radius: 5px; 
+                       text-decoration: none; color: white; font-size: 0.9em; }}
+        .view-toggle:hover {{ background: #218838; }}
     </style>
 </head>
 <body>
     <div class="header">
-        <div class="title">ETF Feature Inspector ({data_tier.upper()})</div>
+        <div class="title">📈 ETF Feature Inspector ({data_tier.upper()})</div>
         <div class="controls">
+            <a href="_inspector_scatter.html" class="view-toggle">📊 Scatter View</a>
             <select class="category-select" id="category-select">
                 <option value="all">All Categories</option>
                 <option value="target">Targets</option>

@@ -42,15 +42,29 @@ These are direct aggregations of daily OHLCV bars into weekly summaries.
 These features are computed from a single week's L0 data. Log transforms are used for better statistical properties (approximate normality, additive returns).
 
 ### `log_return`
-**Weekly log return**
+**Week-over-week close-to-close return (PRIMARY)**
 
 ```
-log_return = log(close / open)
+log_return = log(close_t / close_{t-1})
 ```
 
-- **Interpretation**: The continuously-compounded return for the week
+- **Interpretation**: The continuously-compounded return from last week's close to this week's close
 - **Range**: Typically -0.2 to +0.2 (±20% weekly moves are rare)
-- **Note**: Uses open-to-close (not close-to-close) to capture intra-week movement
+- **CRITICAL**: This is the PRIMARY return measure and prediction target
+- **Alignment**: Matches trading use case (enter at close, exit at close)
+- **Note**: First week will be NaN (no previous close available)
+
+### `log_return_intraweek`
+**Intra-week open-to-close return**
+
+```
+log_return_intraweek = log(close / open)
+```
+
+- **Interpretation**: Return from Monday's open to Friday's close within the same week
+- **Range**: Typically -0.15 to +0.15
+- **Use**: May capture intra-week momentum/reversal patterns
+- **Note**: Separate from `log_return`; used as a feature, not as prediction target
 
 ### `log_range`
 **Log price range**
@@ -270,7 +284,8 @@ LOOKBACK_PERIODS = {
 
 | Feature | Formula | Typical Range | Interpretation |
 |---------|---------|---------------|----------------|
-| `log_return` | log(close/open) | ±0.1 | Weekly return |
+| `log_return` | log(close_t/close_{t-1}) | ±0.1 | Week-over-week return (TARGET) |
+| `log_return_intraweek` | log(close/open) | ±0.1 | Intra-week return (feature) |
 | `log_range` | log(high/low) | 0.01–0.15 | Price dispersion |
 | `log_volume` | log(volume) | 14–22 | Trading activity |
 | `intra_week_volatility` | std(daily returns) | 0.005–0.05 | Realized vol |

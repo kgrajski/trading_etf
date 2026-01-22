@@ -5,9 +5,11 @@
 #
 # This script performs a complete data refresh:
 # 1. Fetches new daily data from Alpaca (incremental mode)
-# 2. Regenerates weekly features
-# 3. Regenerates visualizations
-# 4. Rebuilds the feature matrix
+# 2. Analyzes data coverage (sweet spot analysis)
+# 3. Generates ETF retrospective report
+# 4. Regenerates weekly features
+# 5. Regenerates visualizations
+# 6. Rebuilds the feature matrix
 #
 # SCHEDULE:
 #   Recommended: Saturday 8am (after Friday data is fully available)
@@ -62,23 +64,37 @@ echo "==========================================================================
 python src/workflow/02-fetch-daily-data.py
 echo
 
-# Step 2: Generate weekly features
+# Step 2: Analyze data coverage
 echo "============================================================================="
-echo " Step 2: Generate Weekly Features"
+echo " Step 2: Analyze Data Coverage"
+echo "============================================================================="
+python src/workflow/02a-analyze-data-coverage.py
+echo
+
+# Step 3: ETF retrospective report
+echo "============================================================================="
+echo " Step 3: ETF Retrospective Report"
+echo "============================================================================="
+python src/workflow/02b-etf-retrospective.py
+echo
+
+# Step 4: Generate weekly features
+echo "============================================================================="
+echo " Step 4: Generate Weekly Features"
 echo "============================================================================="
 python src/workflow/03-generate-features.py
 echo
 
-# Step 3: Generate visualizations
+# Step 5: Generate visualizations
 echo "============================================================================="
-echo " Step 3: Generate Visualizations"
+echo " Step 5: Generate Visualizations"
 echo "============================================================================="
 python src/workflow/04-visualize-features.py
 echo
 
-# Step 4: Build feature matrix
+# Step 6: Build feature matrix
 echo "============================================================================="
-echo " Step 4: Build Feature Matrix"
+echo " Step 6: Build Feature Matrix"
 echo "============================================================================="
 python src/workflow/05-build-feature-matrix.py
 echo

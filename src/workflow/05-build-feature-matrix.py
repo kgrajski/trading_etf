@@ -1,41 +1,41 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
 """
-Build cross-sectional feature matrix for prediction experiments.
+05-build-feature-matrix.py
 
-Creates aligned feature matrices from weekly ETF data where:
-- Rows = weeks (aligned across all symbols)
-- Columns = features from all symbols (cross-sectional)
+Build a long-format feature matrix for rolling-window cross-sectional modeling.
 
-Features include:
-- Target symbol features (what we're predicting)
-- Macro symbol features (predictors only, not prediction targets)
-- Specialized cross-symbol features (VIX term structure, yield curve slope, etc.)
+Each row represents one symbol at one week, containing:
+- Metadata: symbol, name, category, week_start
+- Positional encoding: week_idx, week_of_year, month, week_of_month, quarter, year
+- Features: all L1/L2 derived features
+- Target: log_return for the FOLLOWING week (shifted)
 
-This enables predicting symbol X using features from all symbols + macro indicators.
+This format supports:
+- Cross-sectional models (predict all symbols for a given week)
+- Time-series models (sequences of weeks for each symbol)
+- Symbol-independent training (pool all symbols together)
 
-Input: data/historical/{tier}/weekly/*.csv
-Output: data/features/{tier}/feature_matrix.parquet, target_matrix.parquet
+Output:
+- data/processed/{tier}/feature_matrix.parquet (primary)
+- data/processed/{tier}/feature_matrix_sample.csv (first 1000 rows for inspection)
+- data/processed/{tier}/feature_matrix_config.json (metadata)
 """
 
 import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Tuple
 
-from src.training.feature_builder import FeatureBuilder
+import numpy as np
+import pandas as pd
+
 from src.workflow.config import (
     DATA_TIER,
-    MACRO_SYMBOL_LIST,
-    MATRIX_FEATURES,
-    PREDICTION_HORIZON,
-    SPECIALIZED_MACRO_FEATURES,
+    MACRO_SYMBOLS,
     SYMBOL_PREFIX_FILTER,
-    TARGET_FEATURE,
 )
 from src.workflow.workflow_utils import (
-    get_features_dir,
     get_historical_dir,
     get_metadata_dir,
     print_summary,
@@ -45,182 +45,454 @@ from src.workflow.workflow_utils import (
 
 logger = setup_logging()
 
+# =============================================================================
+# Configuration
+# =============================================================================
 
-def get_symbol_lists(weekly_dir: Path) -> tuple[List[str], List[str]]:
-    """Get lists of target and macro symbols from weekly data.
+# Minimum weeks of history required to include a symbol-week in the matrix
+MIN_HISTORY_WEEKS = 12  # Need 12 weeks for momentum_12w to be valid
 
-    Applies SYMBOL_PREFIX_FILTER to targets only.
-    Macro symbols are identified from MACRO_SYMBOL_LIST config.
+# Feature columns to include (must match 03-generate-features.py output)
+FEATURE_COLS = [
+    # L1: Single-week derived
+    "log_return",
+    "log_return_intraweek",
+    "log_range",
+    "log_volume",
+    "log_avg_daily_volume",
+    "intra_week_volatility",
+    # L2: Temporal/rolling
+    "log_return_ma4",
+    "log_return_ma12",
+    "log_volume_ma4",
+    "log_volume_ma12",
+    "momentum_4w",
+    "momentum_12w",
+    "volatility_ma4",
+    "volatility_ma12",
+    "log_volume_delta",
+]
 
-    Args:
-        weekly_dir: Directory containing weekly CSV files
+# Metadata columns
+METADATA_COLS = ["symbol", "name", "category", "week_start"]
 
+# Positional encoding columns - integer (human-readable, tree models)
+POSITIONAL_INT_COLS = [
+    "week_idx",       # Sequential integer (global ordering)
+    "week_of_year",   # 1-52 (ISO week number)
+    "month",          # 1-12
+    "week_of_month",  # 1-4
+    "quarter",        # 1-4
+    "year",           # e.g., 2024
+]
+
+# Positional encoding columns - sin/cos (neural networks, time-series models)
+# Each periodicity gets a sin/cos pair to preserve cyclical relationships
+POSITIONAL_SINCOS_COLS = [
+    # Week of year (period=52)
+    "pos_week_of_year_sin",
+    "pos_week_of_year_cos",
+    # Month (period=12)
+    "pos_month_sin",
+    "pos_month_cos",
+    # Week of month (period=4)
+    "pos_week_of_month_sin",
+    "pos_week_of_month_cos",
+    # Quarter (period=4)
+    "pos_quarter_sin",
+    "pos_quarter_cos",
+    # Global position - multiple frequencies for long-range patterns
+    # Using periods: 52 (annual), 26 (semi-annual), 13 (quarterly), 4 (monthly)
+    "pos_global_52_sin",
+    "pos_global_52_cos",
+    "pos_global_26_sin",
+    "pos_global_26_cos",
+    "pos_global_13_sin",
+    "pos_global_13_cos",
+    "pos_global_4_sin",
+    "pos_global_4_cos",
+]
+
+POSITIONAL_COLS = POSITIONAL_INT_COLS + POSITIONAL_SINCOS_COLS
+
+TARGET_COL = "target_return"
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def load_symbol_metadata(metadata_dir: Path) -> Dict[str, Dict[str, str]]:
+    """Load metadata for all symbols (targets + macros).
+    
     Returns:
-        Tuple of (target_symbols, macro_symbols)
+        Dict mapping symbol -> {name, category}
     """
-    # Get all available symbols
-    csv_files = sorted(weekly_dir.glob("*.csv"))
-    csv_files = [f for f in csv_files if not f.name.startswith("_")]
-    all_symbols = [f.stem for f in csv_files]
+    metadata = {}
+    
+    # Load target ETFs
+    filtered_path = metadata_dir / "filtered_etfs.json"
+    if filtered_path.exists():
+        with open(filtered_path) as f:
+            data = json.load(f)
+            # Handle both {"etfs": [...]} and [...] formats
+            etf_list = data.get("etfs", data) if isinstance(data, dict) else data
+            for etf in etf_list:
+                metadata[etf["symbol"]] = {
+                    "name": etf.get("name", ""),
+                    "category": "target",
+                }
+    
+    # Add macro symbols from config
+    for category, symbols in MACRO_SYMBOLS.items():
+        for symbol, name in symbols.items():
+            metadata[symbol] = {
+                "name": name,
+                "category": category,
+            }
+    
+    return metadata
 
-    # Identify macro symbols
-    macro_set: Set[str] = set(MACRO_SYMBOL_LIST)
-    macro_symbols = [s for s in all_symbols if s in macro_set]
 
-    # Identify target symbols (everything else)
-    target_symbols = [s for s in all_symbols if s not in macro_set]
+def compute_positional_encoding(week_start: pd.Timestamp, week_idx: int) -> Dict[str, float]:
+    """Compute positional encoding features for a week.
+    
+    Includes both integer encodings (for human readability, tree models)
+    and sin/cos encodings (for neural networks, time-series models).
+    
+    Args:
+        week_start: Monday date of the week
+        week_idx: Global week index (0, 1, 2, ...)
+        
+    Returns:
+        Dict with positional encoding values
+    """
+    iso_cal = week_start.isocalendar()
+    
+    # Integer encodings
+    week_of_year = iso_cal.week  # 1-52
+    month = week_start.month  # 1-12
+    day_of_month = week_start.day
+    week_of_month = min((day_of_month - 1) // 7 + 1, 4)  # 1-4
+    quarter = (week_start.month - 1) // 3 + 1  # 1-4
+    year = week_start.year
+    
+    # Sin/cos helper - converts position to sin/cos for given period
+    def sincos(position: float, period: float) -> Tuple[float, float]:
+        angle = 2 * np.pi * position / period
+        return np.sin(angle), np.cos(angle)
+    
+    # Compute sin/cos encodings for each periodicity
+    woy_sin, woy_cos = sincos(week_of_year, 52)
+    month_sin, month_cos = sincos(month, 12)
+    wom_sin, wom_cos = sincos(week_of_month, 4)
+    quarter_sin, quarter_cos = sincos(quarter, 4)
+    
+    # Global position with multiple frequencies
+    # These capture long-range patterns at different scales
+    g52_sin, g52_cos = sincos(week_idx, 52)   # Annual cycle
+    g26_sin, g26_cos = sincos(week_idx, 26)   # Semi-annual
+    g13_sin, g13_cos = sincos(week_idx, 13)   # Quarterly
+    g4_sin, g4_cos = sincos(week_idx, 4)      # Monthly
+    
+    return {
+        # Integer encodings
+        "week_of_year": week_of_year,
+        "month": month,
+        "week_of_month": week_of_month,
+        "quarter": quarter,
+        "year": year,
+        # Sin/cos encodings - cyclical
+        "pos_week_of_year_sin": woy_sin,
+        "pos_week_of_year_cos": woy_cos,
+        "pos_month_sin": month_sin,
+        "pos_month_cos": month_cos,
+        "pos_week_of_month_sin": wom_sin,
+        "pos_week_of_month_cos": wom_cos,
+        "pos_quarter_sin": quarter_sin,
+        "pos_quarter_cos": quarter_cos,
+        # Sin/cos encodings - global position (multiple frequencies)
+        "pos_global_52_sin": g52_sin,
+        "pos_global_52_cos": g52_cos,
+        "pos_global_26_sin": g26_sin,
+        "pos_global_26_cos": g26_cos,
+        "pos_global_13_sin": g13_sin,
+        "pos_global_13_cos": g13_cos,
+        "pos_global_4_sin": g4_sin,
+        "pos_global_4_cos": g4_cos,
+    }
 
-    # Apply prefix filter to targets only
-    if SYMBOL_PREFIX_FILTER:
-        target_symbols = [
-            s for s in target_symbols if s.startswith(SYMBOL_PREFIX_FILTER)
-        ]
 
-    return sorted(target_symbols), sorted(macro_symbols)
+def load_weekly_data(filepath: Path) -> Optional[pd.DataFrame]:
+    """Load weekly feature data for a symbol.
+    
+    Args:
+        filepath: Path to weekly CSV
+        
+    Returns:
+        DataFrame or None if loading fails
+    """
+    try:
+        df = pd.read_csv(filepath)
+        df["week_start"] = pd.to_datetime(df["week_start"])
+        return df.sort_values("week_start").reset_index(drop=True)
+    except Exception as e:
+        logger.warning(f"Failed to load {filepath.name}: {e}")
+        return None
 
+
+def build_symbol_rows(
+    df: pd.DataFrame,
+    symbol: str,
+    name: str,
+    category: str,
+    global_week_map: Dict[pd.Timestamp, int],
+) -> List[Dict[str, Any]]:
+    """Build feature matrix rows for a single symbol.
+    
+    Args:
+        df: Weekly feature DataFrame for the symbol
+        symbol: Ticker symbol
+        name: Symbol description
+        category: Symbol category
+        global_week_map: Mapping from week_start to global week_idx
+        
+    Returns:
+        List of row dicts
+    """
+    rows = []
+    
+    # Create shifted target (next week's return)
+    df = df.copy()
+    df["target_return"] = df["log_return"].shift(-1)
+    
+    for idx, row in df.iterrows():
+        week_start = row["week_start"]
+        
+        # Skip if target is NaN (last week)
+        if pd.isna(row["target_return"]):
+            continue
+        
+        # Skip if not enough history (features will have NaN)
+        if idx < MIN_HISTORY_WEEKS:
+            continue
+        
+        # Check if all features are valid
+        feature_values = [row.get(col) for col in FEATURE_COLS]
+        if any(pd.isna(v) for v in feature_values):
+            continue
+        
+        # Get global week index
+        week_idx = global_week_map.get(week_start, -1)
+        
+        # Build row
+        row_dict = {
+            # Metadata
+            "symbol": symbol,
+            "name": name,
+            "category": category,
+            "week_start": week_start,
+            # Positional encoding (pass week_idx for global position sin/cos)
+            "week_idx": week_idx,
+            **compute_positional_encoding(week_start, week_idx),
+            # Features
+            **{col: row[col] for col in FEATURE_COLS if col in row},
+            # Target
+            "target_return": row["target_return"],
+        }
+        
+        rows.append(row_dict)
+    
+    return rows
+
+
+def build_global_week_index(weekly_dir: Path) -> Tuple[Dict[pd.Timestamp, int], List[pd.Timestamp]]:
+    """Build a global week index from all available data.
+    
+    Returns:
+        Tuple of (week_start -> week_idx mapping, sorted list of all weeks)
+    """
+    all_weeks = set()
+    
+    for csv_file in weekly_dir.glob("*.csv"):
+        try:
+            df = pd.read_csv(csv_file, usecols=["week_start"])
+            weeks = pd.to_datetime(df["week_start"])
+            all_weeks.update(weeks)
+        except Exception:
+            continue
+    
+    sorted_weeks = sorted(all_weeks)
+    week_map = {w: i for i, w in enumerate(sorted_weeks)}
+    
+    return week_map, sorted_weeks
+
+
+# =============================================================================
+# Main
+# =============================================================================
 
 @workflow_script("05-build-feature-matrix")
 def main() -> None:
     """Main workflow function."""
-    # Configuration
+    # Paths
     metadata_dir = get_metadata_dir()
     weekly_dir = get_historical_dir(DATA_TIER) / "weekly"
-    output_dir = get_features_dir(DATA_TIER)
+    output_dir = Path("data/processed") / DATA_TIER
     os.makedirs(output_dir, exist_ok=True)
-
+    
     print("Configuration:")
     print(f"  Data tier: {DATA_TIER}")
-    print(f"  Symbol filter (targets only): {SYMBOL_PREFIX_FILTER or 'None'}")
-    print(f"  Features per symbol: {len(MATRIX_FEATURES)}")
-    print(f"  Specialized features: {len(SPECIALIZED_MACRO_FEATURES)}")
-    print(f"  Prediction horizon: +{PREDICTION_HORIZON} week(s)")
-    print(f"  Target feature: {TARGET_FEATURE}")
+    print(f"  Symbol filter: {SYMBOL_PREFIX_FILTER or 'None'}")
+    print(f"  Min history weeks: {MIN_HISTORY_WEEKS}")
     print(f"  Input: {weekly_dir}")
     print(f"  Output: {output_dir}")
     print()
-
-    # Get symbol lists
-    target_symbols, macro_symbols = get_symbol_lists(weekly_dir)
-
-    print(f"Symbol breakdown:")
-    print(f"  Target ETFs: {len(target_symbols)}")
-    if target_symbols:
-        print(
-            f"    {', '.join(target_symbols[:10])}"
-            f"{'...' if len(target_symbols) > 10 else ''}"
-        )
-    print(f"  Macro symbols: {len(macro_symbols)}")
-    if macro_symbols:
-        print(f"    {', '.join(macro_symbols)}")
-    print()
-
-    if not target_symbols:
-        logger.error("No target symbols found. Please run previous workflow scripts.")
+    
+    if not weekly_dir.exists():
+        logger.error(f"Weekly data directory not found: {weekly_dir}")
+        logger.error("Please run 03-generate-features.py first.")
         return
-
+    
+    # Load metadata
+    print("Loading symbol metadata...")
+    symbol_metadata = load_symbol_metadata(metadata_dir)
+    print(f"  Loaded metadata for {len(symbol_metadata)} symbols")
+    
+    # Build global week index
+    print("Building global week index...")
+    global_week_map, all_weeks = build_global_week_index(weekly_dir)
+    print(f"  Found {len(all_weeks)} unique weeks")
+    if all_weeks:
+        print(f"  Range: {all_weeks[0].strftime('%Y-%m-%d')} to {all_weeks[-1].strftime('%Y-%m-%d')}")
+    print()
+    
+    # Get files to process
+    csv_files = sorted(weekly_dir.glob("*.csv"))
+    if SYMBOL_PREFIX_FILTER:
+        csv_files = [f for f in csv_files if f.stem.startswith(SYMBOL_PREFIX_FILTER)]
+    
+    print(f"Processing {len(csv_files)} symbol files...")
+    print("-" * 80)
+    
     # Build feature matrix
-    print("Building feature matrix...")
-    print("-" * 80)
-
-    builder = FeatureBuilder(
-        weekly_data_dir=weekly_dir,
-        target_symbols=target_symbols,
-        macro_symbols=macro_symbols,
-        features=MATRIX_FEATURES,
-        specialized_features=SPECIALIZED_MACRO_FEATURES,
-    )
-
-    builder.load_weekly_data()
-    feature_matrix = builder.build_feature_matrix(align_to_common_range=True)
-
+    all_rows = []
+    symbols_processed = 0
+    symbols_with_data = 0
+    
+    for i, csv_file in enumerate(csv_files, 1):
+        symbol = csv_file.stem
+        meta = symbol_metadata.get(symbol, {"name": "", "category": "unknown"})
+        
+        if i % 100 == 0 or i == len(csv_files):
+            print(f"  [{i}/{len(csv_files)}] Processing {symbol}...")
+        
+        df = load_weekly_data(csv_file)
+        if df is None or df.empty:
+            continue
+        
+        symbols_processed += 1
+        
+        rows = build_symbol_rows(
+            df=df,
+            symbol=symbol,
+            name=meta["name"],
+            category=meta["category"],
+            global_week_map=global_week_map,
+        )
+        
+        if rows:
+            all_rows.extend(rows)
+            symbols_with_data += 1
+    
     print()
-    print("Feature matrix summary:")
+    print(f"Built {len(all_rows)} rows from {symbols_with_data} symbols")
+    
+    if not all_rows:
+        logger.error("No valid rows generated. Check data and configuration.")
+        return
+    
+    # Create DataFrame
+    print()
+    print("Creating feature matrix DataFrame...")
+    feature_matrix = pd.DataFrame(all_rows)
+    
+    # Sort by week_idx, then symbol (useful for time-series access)
+    feature_matrix = feature_matrix.sort_values(
+        ["week_idx", "symbol"]
+    ).reset_index(drop=True)
+    
+    # Compute statistics
+    n_weeks = feature_matrix["week_idx"].nunique()
+    n_symbols = feature_matrix["symbol"].nunique()
+    n_features = len(FEATURE_COLS)
+    
+    # Rows per week statistics
+    rows_per_week = feature_matrix.groupby("week_idx").size()
+    
     print(f"  Shape: {feature_matrix.shape}")
-    print(
-        f"  Date range: {feature_matrix.index.min().date()} to "
-        f"{feature_matrix.index.max().date()}"
-    )
-
-    # Count feature types
-    target_cols = [c for c in feature_matrix.columns if c.split("_")[0] in target_symbols]
-    macro_cols = [c for c in feature_matrix.columns if c.split("_")[0] in macro_symbols]
-    specialized_cols = list(SPECIALIZED_MACRO_FEATURES.keys())
-    specialized_cols = [c for c in specialized_cols if c in feature_matrix.columns]
-
-    print(f"  Target symbol features: {len(target_cols)}")
-    print(f"  Macro symbol features: {len(macro_cols)}")
-    print(f"  Specialized features: {len(specialized_cols)}")
-    print(f"  Total features: {feature_matrix.shape[1]}")
-    print(f"  Memory: {feature_matrix.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+    print(f"  Unique weeks: {n_weeks}")
+    print(f"  Unique symbols: {n_symbols}")
+    print(f"  Features per row: {n_features}")
+    print(f"  Rows per week: min={rows_per_week.min()}, max={rows_per_week.max()}, mean={rows_per_week.mean():.1f}")
+    
+    # Save outputs
     print()
-
-    # Build target matrix
-    print("Building target matrix...")
-    print("-" * 80)
-
-    target_matrix = builder.build_target_matrix(
-        target_feature=TARGET_FEATURE,
-        prediction_horizon=PREDICTION_HORIZON,
-    )
-
-    print()
-    print("Target matrix summary:")
-    print(f"  Shape: {target_matrix.shape}")
-    print(f"  Target symbols: {target_matrix.shape[1]}")
-    print(
-        f"  Non-null predictions possible: "
-        f"{target_matrix.notna().all(axis=1).sum()} weeks"
-    )
-    print()
-
-    # Save
-    print("Saving matrices...")
-    builder.save(output_dir)
-
-    config: Dict[str, Any] = {
+    print("Saving outputs...")
+    
+    # Parquet (primary)
+    parquet_path = output_dir / "feature_matrix.parquet"
+    feature_matrix.to_parquet(parquet_path, index=False)
+    parquet_size = os.path.getsize(parquet_path) / (1024 * 1024)
+    print(f"  Parquet: {parquet_path} ({parquet_size:.1f} MB)")
+    
+    # CSV sample (for inspection)
+    csv_sample_path = output_dir / "feature_matrix_sample.csv"
+    feature_matrix.head(1000).to_csv(csv_sample_path, index=False)
+    print(f"  CSV sample: {csv_sample_path} (first 1000 rows)")
+    
+    # Config JSON (metadata)
+    config = {
+        "generated_at": datetime.now().isoformat(),
         "data_tier": DATA_TIER,
-        "symbol_filter": SYMBOL_PREFIX_FILTER,
-        "target_symbols": target_symbols,
-        "macro_symbols": macro_symbols,
-        "features": MATRIX_FEATURES,
-        "specialized_features": list(SPECIALIZED_MACRO_FEATURES.keys()),
-        "prediction_horizon": PREDICTION_HORIZON,
-        "target_feature": TARGET_FEATURE,
-        "feature_matrix_shape": list(feature_matrix.shape),
-        "target_matrix_shape": list(target_matrix.shape),
-        "date_range": {
-            "start": str(feature_matrix.index.min().date()),
-            "end": str(feature_matrix.index.max().date()),
+        "n_rows": len(feature_matrix),
+        "n_weeks": n_weeks,
+        "n_symbols": n_symbols,
+        "n_features": n_features,
+        "min_history_weeks": MIN_HISTORY_WEEKS,
+        "week_range": {
+            "start": all_weeks[0].strftime("%Y-%m-%d") if all_weeks else None,
+            "end": all_weeks[-1].strftime("%Y-%m-%d") if all_weeks else None,
         },
-        "created_at": datetime.now().isoformat(),
+        "columns": {
+            "metadata": METADATA_COLS,
+            "positional_int": POSITIONAL_INT_COLS,
+            "positional_sincos": POSITIONAL_SINCOS_COLS,
+            "features": FEATURE_COLS,
+            "target": TARGET_COL,
+        },
+        "rows_per_week_stats": {
+            "min": int(rows_per_week.min()),
+            "max": int(rows_per_week.max()),
+            "mean": float(rows_per_week.mean()),
+        },
     }
-
-    config_path = output_dir / "config.json"
+    
+    config_path = output_dir / "feature_matrix_config.json"
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
     print(f"  Config: {config_path}")
+    
     print()
-
-    # Preview
-    print("Feature matrix preview (first 5 rows, first 10 columns):")
-    print(feature_matrix.iloc[:5, :10].to_string())
-    print()
-
-    # Show specialized features
-    if specialized_cols:
-        print("Specialized features preview:")
-        print(feature_matrix[specialized_cols].head().to_string())
-        print()
-
-    # Summary
     print_summary(
-        target_symbols=len(target_symbols),
-        macro_symbols=len(macro_symbols),
-        weeks=len(feature_matrix),
-        features_per_symbol=len(MATRIX_FEATURES),
-        specialized_features=len(specialized_cols),
-        total_features=feature_matrix.shape[1],
-        output=str(output_dir),
+        total_rows=len(feature_matrix),
+        unique_weeks=n_weeks,
+        unique_symbols=n_symbols,
+        features_per_row=n_features,
+        min_rows_per_week=int(rows_per_week.min()),
+        max_rows_per_week=int(rows_per_week.max()),
+        parquet_size_mb=f"{parquet_size:.1f}",
+        output_directory=str(output_dir),
     )
 
 
