@@ -35,7 +35,7 @@ logger = setup_logging()
 # Configuration
 # =============================================================================
 
-EXPERIMENT_NAME = "exp009_rolling_all_models"
+EXPERIMENT_NAME = "exp010_with_positional"
 EXPERIMENT_DIR = Path("experiments") / EXPERIMENT_NAME
 
 # Data configuration
@@ -51,12 +51,22 @@ MODEL_TYPES = ["linear", "ridge", "lasso", "random_forest", "xgboost"]
 NORMALIZE_FEATURES = True
 NORMALIZE_TARGET = True
 
-# Feature columns (must match what's in feature matrix)
+# Feature columns - L1/L2 features PLUS positional encodings (31 total)
 FEATURE_COLUMNS = [
+    # L1/L2 price/volume features (15)
     "log_return", "log_return_intraweek", "log_range", "log_volume",
     "log_avg_daily_volume", "intra_week_volatility", "log_return_ma4",
     "log_return_ma12", "log_volume_ma4", "log_volume_ma12", "momentum_4w",
     "momentum_12w", "volatility_ma4", "volatility_ma12", "log_volume_delta",
+    # Positional encodings - sin/cos (16)
+    "pos_week_of_year_sin", "pos_week_of_year_cos",
+    "pos_month_sin", "pos_month_cos",
+    "pos_week_of_month_sin", "pos_week_of_month_cos",
+    "pos_quarter_sin", "pos_quarter_cos",
+    "pos_global_52_sin", "pos_global_52_cos",
+    "pos_global_26_sin", "pos_global_26_cos",
+    "pos_global_13_sin", "pos_global_13_cos",
+    "pos_global_4_sin", "pos_global_4_cos",
 ]
 
 

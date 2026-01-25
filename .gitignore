@@ -50,6 +50,9 @@ env/
 # Reports - generated from 02b script
 /reports/
 
+# Pre-production trade candidates - generated from 21b
+/pre_production/
+
 # Logs - runtime output
 /logs/
 
