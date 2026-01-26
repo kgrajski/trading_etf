@@ -61,56 +61,56 @@ echo
 echo "============================================================================="
 echo " Step 1: Fetch Daily Data (Incremental Mode)"
 echo "============================================================================="
-python src/workflow/02-fetch-daily-data.py
+python src/workflow/pipeline/02-fetch-daily-data.py
 echo
 
 # Step 2: Analyze data coverage
 echo "============================================================================="
 echo " Step 2: Analyze Data Coverage"
 echo "============================================================================="
-python src/workflow/02a-analyze-data-coverage.py
+python src/workflow/pipeline/02a-analyze-data-coverage.py
 echo
 
 # Step 3: ETF retrospective report
 echo "============================================================================="
 echo " Step 3: ETF Retrospective Report"
 echo "============================================================================="
-python src/workflow/02b-etf-retrospective.py
+python src/workflow/pipeline/02b-etf-retrospective.py
 echo
 
 # Step 4: Generate weekly features
 echo "============================================================================="
 echo " Step 4: Generate Weekly Features"
 echo "============================================================================="
-python src/workflow/03-generate-features.py
+python src/workflow/pipeline/03-generate-features.py
 echo
 
 # Step 5a: Generate visualizations
 echo "============================================================================="
 echo " Step 5a: Generate Visualizations"
 echo "============================================================================="
-python src/workflow/04-visualize-features.py
+python src/workflow/pipeline/04-visualize-features.py
 echo
 
 # Step 5b: Scatter visualizations
 echo "============================================================================="
 echo " Step 5b: Scatter Visualizations"
 echo "============================================================================="
-python src/workflow/04b-visualize-scatter.py
+python src/workflow/pipeline/04b-visualize-scatter.py
 echo
 
 # Step 6: Build feature matrix
 echo "============================================================================="
 echo " Step 6: Build Feature Matrix"
 echo "============================================================================="
-python src/workflow/05-build-feature-matrix.py
+python src/workflow/pipeline/05-build-feature-matrix.py
 echo
 
 # Step 7: Generate trade candidates
 echo "============================================================================="
 echo " Step 7: Generate Trade Candidates"
 echo "============================================================================="
-python src/workflow/21b-gen-new-trades.py
+python src/workflow/pipeline/21b-gen-new-trades.py
 echo
 
 # Done
