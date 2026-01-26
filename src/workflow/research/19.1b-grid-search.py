@@ -649,7 +649,7 @@ def run_backtest_with_data(
         "recent_pnl": recent_pnl,
         "prior_max_hold_pnl": prior_max_hold_pnl,
         "recent_max_hold_pnl": recent_max_hold_pnl,
-        "is_degraded": is_degraded,
+        "is_degraded": int(is_degraded),  # Convert to int for Ray Tune compatibility
     }
 
 
@@ -896,7 +896,7 @@ def main():
         best_sharpe = results_df.loc[results_df["sharpe_overall"].idxmax()]
         
         # Best stable (not degraded, highest sortino)
-        stable_df = results_df[~results_df["is_degraded"]]
+        stable_df = results_df[results_df["is_degraded"] == 0]
         best_stable = stable_df.nlargest(1, "sortino_overall").iloc[0] if len(stable_df) > 0 else None
         
         # Best low-concentration (diversified gains)
@@ -915,7 +915,7 @@ def main():
             "best_diversified": best_diversified.to_dict() if best_diversified is not None else None,
             "summary": {
                 "degraded_count": int(results_df["is_degraded"].sum()),
-                "stable_count": int((~results_df["is_degraded"]).sum()),
+                "stable_count": int((results_df["is_degraded"] == 0).sum()),
                 "low_concentration_count": int((results_df["top5_concentration"] < 50).sum()),
             },
         }
