@@ -68,6 +68,9 @@ BOOST_MULTIPLIER = 1.10   # 10% larger positions when condition met
 RECENT_WEEKS = 52  # Split point for period analysis
 SLIPPAGE_ALARM_THRESHOLD = 5.0  # Warn if win rate drops > this %
 
+# Risk metrics
+RISK_FREE_RATE = 0.05  # Annualized risk-free rate (~5% T-bill)
+
 # Data paths
 DAILY_DATA_DIR = PROJECT_ROOT / "data" / "historical" / DATA_TIER / "daily"
 WEEKLY_DATA_DIR = PROJECT_ROOT / "data" / "historical" / DATA_TIER / "weekly"
@@ -151,6 +154,116 @@ def get_trading_weeks(weekly_data: Dict[str, pd.DataFrame]) -> List[Tuple[str, s
             we = ws + pd.Timedelta(days=6)
         trading_weeks.append((ws.strftime("%Y-%m-%d"), we.strftime("%Y-%m-%d")))
     return trading_weeks
+
+
+# =============================================================================
+# Risk Metrics (MUST MATCH 19.1b)
+# =============================================================================
+
+def compute_sharpe_ratio(pnl_series: List[float], periods_per_year: int = 52) -> float:
+    """
+    Compute annualized Sharpe Ratio.
+    
+    Args:
+        pnl_series: List of P&L values per period (e.g., weekly)
+        periods_per_year: Number of periods in a year (52 for weekly)
+    
+    Returns:
+        Annualized Sharpe Ratio
+    """
+    if len(pnl_series) < 2:
+        return 0.0
+    
+    # Convert P&L to returns (as % of initial capital)
+    returns = [pnl / INITIAL_CAPITAL for pnl in pnl_series]
+    
+    mean_return = np.mean(returns)
+    std_return = np.std(returns, ddof=1)
+    
+    if std_return == 0:
+        return 0.0
+    
+    # Annualize: multiply mean by periods, std by sqrt(periods)
+    annual_return = mean_return * periods_per_year
+    annual_std = std_return * np.sqrt(periods_per_year)
+    
+    sharpe = (annual_return - RISK_FREE_RATE) / annual_std
+    return sharpe
+
+
+def compute_sortino_ratio(pnl_series: List[float], periods_per_year: int = 52) -> float:
+    """
+    Compute annualized Sortino Ratio (only penalizes downside volatility).
+    
+    Args:
+        pnl_series: List of P&L values per period
+        periods_per_year: Number of periods in a year
+    
+    Returns:
+        Annualized Sortino Ratio
+    """
+    if len(pnl_series) < 2:
+        return 0.0
+    
+    returns = [pnl / INITIAL_CAPITAL for pnl in pnl_series]
+    
+    mean_return = np.mean(returns)
+    
+    # Downside deviation: std of returns below target (0)
+    downside_returns = [r for r in returns if r < 0]
+    if len(downside_returns) < 2:
+        # No downside volatility - infinite Sortino, cap at large value
+        return 10.0 if mean_return > 0 else 0.0
+    
+    downside_std = np.std(downside_returns, ddof=1)
+    
+    if downside_std == 0:
+        return 10.0 if mean_return > 0 else 0.0
+    
+    annual_return = mean_return * periods_per_year
+    annual_downside_std = downside_std * np.sqrt(periods_per_year)
+    
+    sortino = (annual_return - RISK_FREE_RATE) / annual_downside_std
+    return sortino
+
+
+def compute_top5_concentration(pnl_list: List[float]) -> float:
+    """
+    Compute what percentage of total P&L comes from top 5 trades.
+    
+    Lower is better - means gains are diversified.
+    
+    Returns:
+        Percentage (0-100) of total P&L from top 5 trades
+    """
+    if not pnl_list:
+        return 0.0
+    
+    total_pnl = sum(pnl_list)
+    if total_pnl <= 0:
+        return 100.0  # All losses or zero - concentration metric not meaningful
+    
+    # Sort by P&L descending, take top 5
+    sorted_pnl = sorted(pnl_list, reverse=True)
+    top5_pnl = sum(sorted_pnl[:5])
+    
+    concentration = (top5_pnl / total_pnl) * 100 if total_pnl > 0 else 100.0
+    return min(concentration, 100.0)  # Cap at 100%
+
+
+def compute_profit_factor(pnl_list: List[float]) -> float:
+    """
+    Compute profit factor: gross profit / gross loss.
+    
+    > 1 means wins outpace losses.
+    """
+    gross_profit = sum(p for p in pnl_list if p > 0)
+    gross_loss = abs(sum(p for p in pnl_list if p < 0))
+    
+    if gross_loss == 0:
+        return 10.0 if gross_profit > 0 else 0.0
+    
+    return gross_profit / gross_loss
 
 
 # =============================================================================
@@ -473,7 +586,7 @@ def run_backtest(
 # =============================================================================
 
 def analyze_trades(trades: List[Dict], period_name: str = "All") -> Dict:
-    """Compute comprehensive metrics for a set of trades."""
+    """Compute comprehensive metrics for a set of trades including risk metrics."""
     filled = [t for t in trades if t["entry_date"] is not None]
     expired = [t for t in trades if t["exit_reason"] == "expired"]
     
@@ -487,6 +600,10 @@ def analyze_trades(trades: List[Dict], period_name: str = "All") -> Dict:
             "total_pnl": 0,
             "exit_reasons": {},
             "cumulative_pnl_by_reason": {},
+            "sharpe_ratio": 0,
+            "sortino_ratio": 0,
+            "top5_concentration": 100,
+            "profit_factor": 0,
         }
     
     # Exit reason breakdown
@@ -517,6 +634,24 @@ def analyze_trades(trades: List[Dict], period_name: str = "All") -> Dict:
     bear_winners = sum(1 for t in bear_trades if t["pnl_dollars"] > 0)
     
     total_pnl = sum(t["pnl_dollars"] for t in filled)
+    pnl_list = [t["pnl_dollars"] for t in filled]
+    
+    # Compute weekly P&L for Sharpe/Sortino
+    weekly_pnl = {}
+    for t in filled:
+        if t["exit_date"]:
+            # Get the Monday of the exit week
+            exit_dt = pd.Timestamp(t["exit_date"])
+            week_start = (exit_dt - pd.Timedelta(days=exit_dt.dayofweek)).strftime("%Y-%m-%d")
+            weekly_pnl[week_start] = weekly_pnl.get(week_start, 0) + t["pnl_dollars"]
+    
+    weekly_pnl_list = list(weekly_pnl.values())
+    
+    # Risk metrics
+    sharpe = compute_sharpe_ratio(weekly_pnl_list)
+    sortino = compute_sortino_ratio(weekly_pnl_list)
+    top5_conc = compute_top5_concentration(pnl_list)
+    profit_fact = compute_profit_factor(pnl_list)
     
     return {
         "period": period_name,
@@ -538,6 +673,11 @@ def analyze_trades(trades: List[Dict], period_name: str = "All") -> Dict:
         "bear_pnl": bear_pnl,
         "bull_win_rate": bull_winners / len(bull_trades) * 100 if bull_trades else 0,
         "bear_win_rate": bear_winners / len(bear_trades) * 100 if bear_trades else 0,
+        # Risk metrics
+        "sharpe_ratio": sharpe,
+        "sortino_ratio": sortino,
+        "top5_concentration": top5_conc,
+        "profit_factor": profit_fact,
     }
 
 
@@ -711,6 +851,30 @@ def create_dashboard(
             <td style="padding:8px;text-align:right;">${prior_stats.get('cumulative_pnl_by_reason', {}).get('max_hold', 0):,.2f}</td>
             <td style="padding:8px;text-align:right;">${recent_stats.get('cumulative_pnl_by_reason', {}).get('max_hold', 0):,.2f}</td>
         </tr>
+        <tr style="background:#e8f5e9;">
+            <td style="padding:8px;"><strong>Sharpe Ratio</strong></td>
+            <td style="padding:8px;text-align:right;">{historical_stats['sharpe_ratio']:.3f}</td>
+            <td style="padding:8px;text-align:right;">{prior_stats['sharpe_ratio']:.3f}</td>
+            <td style="padding:8px;text-align:right;">{recent_stats['sharpe_ratio']:.3f}</td>
+        </tr>
+        <tr style="background:#e3f2fd;">
+            <td style="padding:8px;"><strong>Sortino Ratio</strong></td>
+            <td style="padding:8px;text-align:right;">{historical_stats['sortino_ratio']:.3f}</td>
+            <td style="padding:8px;text-align:right;">{prior_stats['sortino_ratio']:.3f}</td>
+            <td style="padding:8px;text-align:right;">{recent_stats['sortino_ratio']:.3f}</td>
+        </tr>
+        <tr style="background:#fff3e0;">
+            <td style="padding:8px;"><strong>Top-5 Concentration</strong></td>
+            <td style="padding:8px;text-align:right;">{historical_stats['top5_concentration']:.1f}%</td>
+            <td style="padding:8px;text-align:right;">{prior_stats['top5_concentration']:.1f}%</td>
+            <td style="padding:8px;text-align:right;">{recent_stats['top5_concentration']:.1f}%</td>
+        </tr>
+        <tr style="background:#fce4ec;">
+            <td style="padding:8px;"><strong>Profit Factor</strong></td>
+            <td style="padding:8px;text-align:right;">{historical_stats['profit_factor']:.2f}</td>
+            <td style="padding:8px;text-align:right;">{prior_stats['profit_factor']:.2f}</td>
+            <td style="padding:8px;text-align:right;">{recent_stats['profit_factor']:.2f}</td>
+        </tr>
     </table>
     """
     
@@ -735,6 +899,17 @@ def create_dashboard(
     
     output_path.write_text(html_content)
     return output_path
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def sortino_fmt(val: float) -> str:
+    """Format Sortino ratio, handling the capped value of 10.0."""
+    if val >= 10.0:
+        return ">10"
+    return f"{val:.3f}"
 
 
 # =============================================================================
@@ -806,15 +981,21 @@ def main():
     
     # Print results
     print()
-    print("=" * 90)
+    print("=" * 100)
     print("RESULTS")
-    print("=" * 90)
+    print("=" * 100)
     print()
-    print(f"{'Metric':<25} {'Historical':>15} {'Prior 52w':>15} {'Recent 52w':>15}")
-    print("-" * 90)
-    print(f"{'Filled Trades':<25} {historical_stats['filled_trades']:>15} {prior_stats['filled_trades']:>15} {recent_stats['filled_trades']:>15}")
-    print(f"{'Win Rate':<25} {historical_stats['win_rate']:>14.1f}% {prior_stats['win_rate']:>14.1f}% {recent_stats['win_rate']:>14.1f}%")
-    print(f"{'Total P&L':<25} ${historical_stats['total_pnl']:>13,.2f} ${prior_stats['total_pnl']:>13,.2f} ${recent_stats['total_pnl']:>13,.2f}")
+    print(f"{'Metric':<25} {'Historical':>18} {'Prior 52w':>18} {'Recent 52w':>18}")
+    print("-" * 100)
+    print(f"{'Filled Trades':<25} {historical_stats['filled_trades']:>18} {prior_stats['filled_trades']:>18} {recent_stats['filled_trades']:>18}")
+    print(f"{'Win Rate':<25} {historical_stats['win_rate']:>17.1f}% {prior_stats['win_rate']:>17.1f}% {recent_stats['win_rate']:>17.1f}%")
+    print(f"{'Total P&L':<25} ${historical_stats['total_pnl']:>16,.2f} ${prior_stats['total_pnl']:>16,.2f} ${recent_stats['total_pnl']:>16,.2f}")
+    print()
+    print("Risk Metrics:")
+    print(f"{'  Sharpe Ratio':<25} {historical_stats['sharpe_ratio']:>18.3f} {prior_stats['sharpe_ratio']:>18.3f} {recent_stats['sharpe_ratio']:>18.3f}")
+    print(f"{'  Sortino Ratio':<25} {sortino_fmt(historical_stats['sortino_ratio']):>18} {sortino_fmt(prior_stats['sortino_ratio']):>18} {sortino_fmt(recent_stats['sortino_ratio']):>18}")
+    print(f"{'  Top-5 Concentration':<25} {historical_stats['top5_concentration']:>17.1f}% {prior_stats['top5_concentration']:>17.1f}% {recent_stats['top5_concentration']:>17.1f}%")
+    print(f"{'  Profit Factor':<25} {historical_stats['profit_factor']:>18.2f} {prior_stats['profit_factor']:>18.2f} {recent_stats['profit_factor']:>18.2f}")
     print()
     
     for period_name, stats in [("Historical", historical_stats), 
