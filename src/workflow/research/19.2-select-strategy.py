@@ -32,7 +32,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -184,8 +183,8 @@ def apply_filters(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
 # Visualization
 # =============================================================================
 
-def create_distribution_panel(df: pd.DataFrame, top_configs: pd.DataFrame) -> go.Figure:
-    """Create 4-panel histogram showing distributions."""
+def create_distribution_panel(df: pd.DataFrame, stages: Dict[str, pd.DataFrame], top_configs: pd.DataFrame) -> go.Figure:
+    """Create 4-panel histogram showing distributions with filter stage overlays."""
     fig = make_subplots(
         rows=2, cols=2,
         subplot_titles=(
@@ -194,165 +193,244 @@ def create_distribution_panel(df: pd.DataFrame, top_configs: pd.DataFrame) -> go
             "Top-5 Concentration % Distribution",
             "Profit Factor Distribution",
         ),
-        vertical_spacing=0.12,
-        horizontal_spacing=0.1,
+        vertical_spacing=0.15,
+        horizontal_spacing=0.12,
     )
     
     metrics = [
-        ("total_return_pcnt", 1, 1, "#2196F3"),
-        ("sortino_overall", 1, 2, "#4CAF50"),
-        ("top5_concentration", 2, 1, "#FF9800"),
-        ("profit_factor", 2, 2, "#9C27B0"),
+        ("total_return_pcnt", 1, 1, "Return %"),
+        ("sortino_overall", 1, 2, "Sortino"),
+        ("top5_concentration", 2, 1, "Top5 %"),
+        ("profit_factor", 2, 2, "Profit Factor"),
     ]
     
-    for metric, row, col, color in metrics:
+    # Define colors for each filter stage (from rejected to final)
+    stage_colors = {
+        "all": "#BDBDBD",        # Gray - all configs
+        "stable": "#90CAF9",     # Light blue
+        "diversified": "#81C784", # Light green
+        "thesis_works": "#FFD54F", # Amber
+        "profitable": "#FF8A65",  # Light orange
+        "final": "#4CAF50",       # Green - survivors
+    }
+    
+    stage_labels = {
+        "all": f"All ({len(stages.get('all', []))})",
+        "stable": f"Stable ({len(stages.get('stable', []))})",
+        "diversified": f"Diversified ({len(stages.get('diversified', []))})",
+        "thesis_works": f"Thesis OK ({len(stages.get('thesis_works', []))})",
+        "profitable": f"Profitable ({len(stages.get('profitable', []))})",
+        "final": f"Final ({len(stages.get('final', []))})",
+    }
+    
+    # Track which legends we've already added
+    legends_added = set()
+    
+    for metric, row, col, label in metrics:
         if metric not in df.columns:
             continue
         
-        values = df[metric].dropna()
+        # Plot each stage as overlapping histograms (largest to smallest for proper layering)
+        for stage_name in ["all", "stable", "diversified", "thesis_works", "profitable", "final"]:
+            stage_df = stages.get(stage_name, pd.DataFrame())
+            if len(stage_df) == 0 or metric not in stage_df.columns:
+                continue
+            
+            values = stage_df[metric].dropna()
+            if len(values) == 0:
+                continue
+            
+            # Only show legend for first metric panel
+            show_legend = stage_name not in legends_added
+            if show_legend:
+                legends_added.add(stage_name)
+            
+            fig.add_trace(
+                go.Histogram(
+                    x=list(values),  # Convert to plain list to avoid binary encoding
+                    nbinsx=30,
+                    marker_color=stage_colors[stage_name],
+                    opacity=0.6,
+                    name=stage_labels[stage_name],
+                    legendgroup=stage_name,
+                    showlegend=show_legend,
+                    hovertemplate=f"{stage_labels[stage_name]}<br>{label}: %{{x:.2f}}<br>Count: %{{y}}<extra></extra>",
+                ),
+                row=row, col=col,
+            )
         
-        # Main histogram
-        fig.add_trace(
-            go.Histogram(
-                x=values,
-                nbinsx=50,
-                marker_color=color,
-                opacity=0.7,
-                name=metric,
-                showlegend=False,
-            ),
-            row=row, col=col,
-        )
-        
-        # Mark top configs
+        # Mark champion (top 1) with a scatter marker
         if len(top_configs) > 0 and metric in top_configs.columns:
-            top_values = top_configs[metric].dropna()
-            for i, val in enumerate(top_values[:5]):
-                fig.add_vline(
-                    x=val, row=row, col=col,
-                    line=dict(color="red", width=2, dash="dash"),
-                    annotation_text=f"#{i+1}" if i == 0 else None,
-                )
+            champ_val = top_configs[metric].iloc[0]
+            fig.add_trace(
+                go.Scatter(
+                    x=[champ_val],
+                    y=[0],
+                    mode="markers+text",
+                    marker=dict(color="red", size=15, symbol="triangle-up"),
+                    text=["★ #1"],
+                    textposition="top center",
+                    textfont=dict(color="red", size=10),
+                    legendgroup="champion",
+                    showlegend=(row == 1 and col == 1),
+                    name="Champion",
+                    hovertemplate=f"Champion: {champ_val:.2f}<extra></extra>",
+                ),
+                row=row, col=col,
+            )
     
     fig.update_layout(
-        title="<b>Strategy Distribution Overview</b><br><sub>Red lines = Top 5 filtered configs</sub>",
-        height=600,
-        showlegend=False,
+        title="<b>Strategy Distribution Overview</b><br><sub>Click legend to toggle filter stages | Red triangle = Champion (#1 by Sortino)</sub>",
+        height=650,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.15,
+            xanchor="center",
+            x=0.5,
+        ),
+        barmode="overlay",
     )
+    
+    # Update axes labels
+    fig.update_xaxes(title_text="Return %", row=1, col=1)
+    fig.update_xaxes(title_text="Sortino Ratio", row=1, col=2)
+    fig.update_xaxes(title_text="Top-5 Concentration %", row=2, col=1)
+    fig.update_xaxes(title_text="Profit Factor", row=2, col=2)
     
     return fig
 
 
-def create_scatter_explorer(df: pd.DataFrame, top_configs: pd.DataFrame) -> go.Figure:
-    """Create scatter plot explorer."""
+def create_scatter_explorer(df: pd.DataFrame, stages: Dict[str, pd.DataFrame], top_configs: pd.DataFrame) -> go.Figure:
+    """Create scatter plot explorer with filter stage coloring."""
     fig = make_subplots(
         rows=1, cols=2,
         subplot_titles=(
-            "Return vs Sortino (colored by stability)",
-            "Return vs Top-5 Concentration",
+            "Return vs Sortino (by filter stage)",
+            "Return vs Top-5 Concentration (by filter stage)",
         ),
         horizontal_spacing=0.1,
     )
     
-    if "total_return_pcnt" not in df.columns:
+    if "total_return_pcnt" not in df.columns or len(df) == 0:
         return fig
     
-    # Create config label for hover
-    df = df.copy()
-    df["config_label"] = df.apply(
-        lambda r: f"SL={r.get('stop_loss_pcnt', '?')}% TP={r.get('profit_exit_pcnt', '?')}% "
-                  f"H={r.get('max_hold_weeks', '?')}w {r.get('boost_direction', '?')} "
-                  f"MinL={r.get('min_loss_pcnt', '?')}%",
-        axis=1
-    )
+    # Define colors for each filter stage
+    stage_colors = {
+        "all": "#BDBDBD",        # Gray - all configs
+        "stable": "#90CAF9",     # Light blue
+        "diversified": "#81C784", # Light green
+        "thesis_works": "#FFD54F", # Amber
+        "profitable": "#FF8A65",  # Light orange
+        "final": "#4CAF50",       # Green - survivors
+    }
     
-    # Scatter 1: Return vs Sortino
-    if "sortino_overall" in df.columns:
-        # Stable configs
-        stable = df[df.get("is_degraded", 1) == 0] if "is_degraded" in df.columns else df
-        degraded = df[df.get("is_degraded", 0) == 1] if "is_degraded" in df.columns else pd.DataFrame()
+    stage_labels = {
+        "all": f"All ({len(stages.get('all', []))})",
+        "stable": f"Stable ({len(stages.get('stable', []))})",
+        "diversified": f"Diversified ({len(stages.get('diversified', []))})",
+        "thesis_works": f"Thesis OK ({len(stages.get('thesis_works', []))})",
+        "profitable": f"Profitable ({len(stages.get('profitable', []))})",
+        "final": f"Final ({len(stages.get('final', []))})",
+    }
+    
+    # Helper to create config label
+    def make_config_label(row):
+        return (f"SL={row.get('stop_loss_pcnt', '?')}% TP={row.get('profit_exit_pcnt', '?')}% "
+                f"H={row.get('max_hold_weeks', '?')}w {row.get('boost_direction', '?')} "
+                f"MinL={row.get('min_loss_pcnt', '?')}%")
+    
+    # Track legends shown
+    legends_shown = set()
+    
+    # Plot each stage in reverse order so final (best) is on top
+    for stage_name in ["all", "stable", "diversified", "thesis_works", "profitable", "final"]:
+        stage_df = stages.get(stage_name, pd.DataFrame())
+        if len(stage_df) == 0:
+            continue
         
-        if len(stable) > 0:
+        stage_df = stage_df.copy()
+        stage_df["config_label"] = stage_df.apply(make_config_label, axis=1)
+        
+        show_legend = stage_name not in legends_shown
+        if show_legend:
+            legends_shown.add(stage_name)
+        
+        # Scatter 1: Return vs Sortino
+        if "sortino_overall" in stage_df.columns and "total_return_pcnt" in stage_df.columns:
             fig.add_trace(
                 go.Scatter(
-                    x=stable["total_return_pcnt"],
-                    y=stable["sortino_overall"],
+                    x=list(stage_df["total_return_pcnt"]),
+                    y=list(stage_df["sortino_overall"]),
                     mode="markers",
-                    marker=dict(color="#4CAF50", size=6, opacity=0.6),
-                    name="Stable",
-                    text=stable["config_label"],
-                    hovertemplate="<b>%{text}</b><br>Return: %{x:.1f}%<br>Sortino: %{y:.2f}<extra></extra>",
+                    marker=dict(color=stage_colors[stage_name], size=6, opacity=0.6),
+                    name=stage_labels[stage_name],
+                    legendgroup=stage_name,
+                    showlegend=show_legend,
+                    text=list(stage_df["config_label"]),
+                    hovertemplate=f"<b>{stage_labels[stage_name]}</b><br>%{{text}}<br>Return: %{{x:.1f}}%<br>Sortino: %{{y:.2f}}<extra></extra>",
                 ),
                 row=1, col=1,
             )
         
-        if len(degraded) > 0:
+        # Scatter 2: Return vs Concentration
+        if "top5_concentration" in stage_df.columns and "total_return_pcnt" in stage_df.columns:
             fig.add_trace(
                 go.Scatter(
-                    x=degraded["total_return_pcnt"],
-                    y=degraded["sortino_overall"],
+                    x=list(stage_df["total_return_pcnt"]),
+                    y=list(stage_df["top5_concentration"]),
                     mode="markers",
-                    marker=dict(color="#F44336", size=6, opacity=0.6),
-                    name="Degraded",
-                    text=degraded["config_label"],
-                    hovertemplate="<b>%{text}</b><br>Return: %{x:.1f}%<br>Sortino: %{y:.2f}<extra></extra>",
+                    marker=dict(color=stage_colors[stage_name], size=6, opacity=0.6),
+                    name=stage_labels[stage_name],
+                    legendgroup=stage_name,
+                    showlegend=False,  # Already shown in first plot
+                    text=list(stage_df["config_label"]),
+                    hovertemplate=f"<b>{stage_labels[stage_name]}</b><br>%{{text}}<br>Return: %{{x:.1f}}%<br>Top-5: %{{y:.1f}}%<extra></extra>",
                 ),
-                row=1, col=1,
+                row=1, col=2,
             )
+    
+    # Highlight top configs with stars (on top of everything)
+    if len(top_configs) > 0:
+        top_configs = top_configs.copy()
+        top_configs["config_label"] = top_configs.apply(make_config_label, axis=1)
         
-        # Highlight top configs
-        if len(top_configs) > 0:
+        if "sortino_overall" in top_configs.columns:
             fig.add_trace(
                 go.Scatter(
-                    x=top_configs["total_return_pcnt"],
-                    y=top_configs["sortino_overall"],
+                    x=list(top_configs["total_return_pcnt"]),
+                    y=list(top_configs["sortino_overall"]),
                     mode="markers",
                     marker=dict(color="gold", size=12, symbol="star", line=dict(color="black", width=1)),
-                    name="Top Picks",
-                    text=top_configs["config_label"] if "config_label" in top_configs.columns else None,
+                    name="★ Top Picks",
+                    legendgroup="top_picks",
+                    text=list(top_configs["config_label"]),
                     hovertemplate="<b>★ TOP PICK</b><br>%{text}<br>Return: %{x:.1f}%<br>Sortino: %{y:.2f}<extra></extra>",
                 ),
                 row=1, col=1,
             )
-    
-    # Scatter 2: Return vs Concentration
-    if "top5_concentration" in df.columns:
-        colors = df["is_degraded"].map({0: "#4CAF50", 1: "#F44336"}) if "is_degraded" in df.columns else "#2196F3"
         
-        fig.add_trace(
-            go.Scatter(
-                x=df["total_return_pcnt"],
-                y=df["top5_concentration"],
-                mode="markers",
-                marker=dict(color=colors, size=6, opacity=0.6),
-                name="All Configs",
-                text=df["config_label"],
-                hovertemplate="<b>%{text}</b><br>Return: %{x:.1f}%<br>Top-5 Conc: %{y:.1f}%<extra></extra>",
-                showlegend=False,
-            ),
-            row=1, col=2,
-        )
-        
-        # Add filter threshold line
-        fig.add_hline(
-            y=FILTERS["top5_concentration_max"], row=1, col=2,
-            line=dict(color="orange", width=2, dash="dash"),
-            annotation_text=f"Filter: <{FILTERS['top5_concentration_max']}%",
-        )
-        
-        # Highlight top configs
-        if len(top_configs) > 0 and "top5_concentration" in top_configs.columns:
+        if "top5_concentration" in top_configs.columns:
             fig.add_trace(
                 go.Scatter(
-                    x=top_configs["total_return_pcnt"],
-                    y=top_configs["top5_concentration"],
+                    x=list(top_configs["total_return_pcnt"]),
+                    y=list(top_configs["top5_concentration"]),
                     mode="markers",
                     marker=dict(color="gold", size=12, symbol="star", line=dict(color="black", width=1)),
-                    name="Top Picks",
+                    name="★ Top Picks",
+                    legendgroup="top_picks",
                     showlegend=False,
                 ),
                 row=1, col=2,
             )
+    
+    # Add filter threshold line for concentration
+    fig.add_hline(
+        y=FILTERS["top5_concentration_max"], row=1, col=2,
+        line=dict(color="red", width=2, dash="dash"),
+        annotation_text=f"Filter: <{FILTERS['top5_concentration_max']}%",
+    )
     
     fig.update_xaxes(title_text="Total Return %", row=1, col=1)
     fig.update_yaxes(title_text="Sortino Ratio", row=1, col=1)
@@ -360,8 +438,185 @@ def create_scatter_explorer(df: pd.DataFrame, top_configs: pd.DataFrame) -> go.F
     fig.update_yaxes(title_text="Top-5 Concentration %", row=1, col=2)
     
     fig.update_layout(
-        title="<b>Scatter Plot Explorer</b><br><sub>Hover for config details | Stars = Top filtered picks</sub>",
-        height=500,
+        title="<b>Scatter Plot Explorer</b><br><sub>Click legend to toggle filter stages | Stars = Top picks after all filters</sub>",
+        height=550,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2,
+            xanchor="center",
+            x=0.5,
+        ),
+    )
+    
+    return fig
+
+
+def create_consistency_explorer(df: pd.DataFrame, stages: Dict[str, pd.DataFrame], top_configs: pd.DataFrame) -> go.Figure:
+    """Create scatter plots comparing overall vs recent metrics for temporal consistency."""
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=(
+            "Sortino: Overall vs Recent (consistency check)",
+            "Top-5 Concentration: Overall vs Recent",
+        ),
+        horizontal_spacing=0.12,
+    )
+    
+    if len(df) == 0:
+        return fig
+    
+    # Check if we have recent metrics
+    has_recent = "sortino_recent" in df.columns and "top5_concentration_recent" in df.columns
+    if not has_recent:
+        fig.add_annotation(
+            text="Recent metrics not available in data",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=16, color="red"),
+        )
+        return fig
+    
+    # Helper to create config label
+    def make_config_label(row):
+        return (f"SL={row.get('stop_loss_pcnt', '?')}% TP={row.get('profit_exit_pcnt', '?')}% "
+                f"H={row.get('max_hold_weeks', '?')}w {row.get('boost_direction', '?')} "
+                f"MinL={row.get('min_loss_pcnt', '?')}%")
+    
+    # Stage colors
+    stage_colors = {
+        "all": "#BDBDBD", "stable": "#90CAF9", "diversified": "#81C784",
+        "thesis_works": "#FFD54F", "profitable": "#FF8A65", "final": "#4CAF50",
+    }
+    stage_labels = {
+        "all": f"All ({len(stages.get('all', []))})",
+        "stable": f"Stable ({len(stages.get('stable', []))})",
+        "diversified": f"Diversified ({len(stages.get('diversified', []))})",
+        "thesis_works": f"Thesis OK ({len(stages.get('thesis_works', []))})",
+        "profitable": f"Profitable ({len(stages.get('profitable', []))})",
+        "final": f"Final ({len(stages.get('final', []))})",
+    }
+    
+    legends_shown = set()
+    
+    # Plot each stage
+    for stage_name in ["all", "stable", "diversified", "thesis_works", "profitable", "final"]:
+        stage_df = stages.get(stage_name, pd.DataFrame())
+        if len(stage_df) == 0:
+            continue
+        
+        stage_df = stage_df.copy()
+        stage_df["config_label"] = stage_df.apply(make_config_label, axis=1)
+        
+        show_legend = stage_name not in legends_shown
+        if show_legend:
+            legends_shown.add(stage_name)
+        
+        # Scatter 1: Sortino Overall vs Recent
+        if "sortino_overall" in stage_df.columns and "sortino_recent" in stage_df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=list(stage_df["sortino_overall"]),
+                    y=list(stage_df["sortino_recent"]),
+                    mode="markers",
+                    marker=dict(color=stage_colors[stage_name], size=6, opacity=0.6),
+                    name=stage_labels[stage_name],
+                    legendgroup=stage_name,
+                    showlegend=show_legend,
+                    text=list(stage_df["config_label"]),
+                    hovertemplate=f"<b>{stage_labels[stage_name]}</b><br>%{{text}}<br>Overall: %{{x:.2f}}<br>Recent: %{{y:.2f}}<extra></extra>",
+                ),
+                row=1, col=1,
+            )
+        
+        # Scatter 2: Concentration Overall vs Recent
+        if "top5_concentration" in stage_df.columns and "top5_concentration_recent" in stage_df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=list(stage_df["top5_concentration"]),
+                    y=list(stage_df["top5_concentration_recent"]),
+                    mode="markers",
+                    marker=dict(color=stage_colors[stage_name], size=6, opacity=0.6),
+                    name=stage_labels[stage_name],
+                    legendgroup=stage_name,
+                    showlegend=False,
+                    text=list(stage_df["config_label"]),
+                    hovertemplate=f"<b>{stage_labels[stage_name]}</b><br>%{{text}}<br>Overall: %{{x:.1f}}%<br>Recent: %{{y:.1f}}%<extra></extra>",
+                ),
+                row=1, col=2,
+            )
+    
+    # Add top configs as stars
+    if len(top_configs) > 0:
+        top_configs = top_configs.copy()
+        top_configs["config_label"] = top_configs.apply(make_config_label, axis=1)
+        
+        if "sortino_overall" in top_configs.columns and "sortino_recent" in top_configs.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=list(top_configs["sortino_overall"]),
+                    y=list(top_configs["sortino_recent"]),
+                    mode="markers",
+                    marker=dict(color="gold", size=12, symbol="star", line=dict(color="black", width=1)),
+                    name="★ Top Picks",
+                    legendgroup="top_picks",
+                    text=list(top_configs["config_label"]),
+                    hovertemplate="<b>★ TOP</b><br>%{text}<br>Overall: %{x:.2f}<br>Recent: %{y:.2f}<extra></extra>",
+                ),
+                row=1, col=1,
+            )
+        
+        if "top5_concentration" in top_configs.columns and "top5_concentration_recent" in top_configs.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=list(top_configs["top5_concentration"]),
+                    y=list(top_configs["top5_concentration_recent"]),
+                    mode="markers",
+                    marker=dict(color="gold", size=12, symbol="star", line=dict(color="black", width=1)),
+                    name="★ Top Picks",
+                    legendgroup="top_picks",
+                    showlegend=False,
+                ),
+                row=1, col=2,
+            )
+    
+    # Add diagonal reference lines (y=x means perfect consistency)
+    # Sortino range
+    sortino_min = min(df["sortino_overall"].min(), df["sortino_recent"].min()) if "sortino_recent" in df.columns else -1
+    sortino_max = max(df["sortino_overall"].max(), df["sortino_recent"].max()) if "sortino_recent" in df.columns else 2
+    fig.add_trace(
+        go.Scatter(
+            x=[sortino_min, sortino_max], y=[sortino_min, sortino_max],
+            mode="lines", line=dict(color="red", width=2, dash="dash"),
+            name="y=x (consistent)", showlegend=True,
+        ),
+        row=1, col=1,
+    )
+    
+    # Concentration range
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 100], y=[0, 100],
+            mode="lines", line=dict(color="red", width=2, dash="dash"),
+            name="y=x", showlegend=False,
+        ),
+        row=1, col=2,
+    )
+    
+    fig.update_xaxes(title_text="Overall Sortino", row=1, col=1)
+    fig.update_yaxes(title_text="Recent 52w Sortino", row=1, col=1)
+    fig.update_xaxes(title_text="Overall Top-5 %", row=1, col=2)
+    fig.update_yaxes(title_text="Recent 52w Top-5 %", row=1, col=2)
+    
+    fig.update_layout(
+        title="<b>Temporal Consistency Explorer</b><br><sub>Points on diagonal = consistent over time | Above diagonal = improving recently | Below = degrading</sub>",
+        height=550,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2,
+            xanchor="center",
+            x=0.5,
+        ),
     )
     
     return fig
@@ -458,10 +713,23 @@ def create_explorer_dashboard(
     """Create interactive HTML explorer dashboard."""
     
     # Create figures
-    dist_fig = create_distribution_panel(df, top_configs)
-    scatter_fig = create_scatter_explorer(df, top_configs)
+    dist_fig = create_distribution_panel(df, stages, top_configs)
+    scatter_fig = create_scatter_explorer(df, stages, top_configs)
+    consistency_fig = create_consistency_explorer(df, stages, top_configs)
     funnel_fig = create_filter_funnel(stages)
     top_table = create_top_configs_table(top_configs)
+    
+    # Helper to convert figure to plain JSON (no binary encoding)
+    def fig_to_plain_json(fig):
+        """Convert plotly figure to plain JSON without binary encoding."""
+        import plotly.io as pio
+        # Force JSON engine to avoid binary encoding
+        return pio.to_json(fig, engine="json")
+    
+    dist_json = fig_to_plain_json(dist_fig)
+    scatter_json = fig_to_plain_json(scatter_fig)
+    consistency_json = fig_to_plain_json(consistency_fig)
+    funnel_json = fig_to_plain_json(funnel_fig)
     
     # Build HTML
     html_content = f"""<!DOCTYPE html>
@@ -577,18 +845,35 @@ def create_explorer_dashboard(
         
         <div class="card">
             <h2>📊 Distribution Overview</h2>
-            {dist_fig.to_html(full_html=False, include_plotlyjs=False)}
+            <div id="dist-plot"></div>
         </div>
         
         <div class="card">
             <h2>🔍 Scatter Plot Explorer</h2>
-            {scatter_fig.to_html(full_html=False, include_plotlyjs=False)}
+            <div id="scatter-plot"></div>
+        </div>
+        
+        <div class="card">
+            <h2>⏱️ Temporal Consistency Explorer</h2>
+            <div id="consistency-plot"></div>
         </div>
         
         <div class="card">
             <h2>🔽 Filter Funnel</h2>
-            {funnel_fig.to_html(full_html=False, include_plotlyjs=False)}
+            <div id="funnel-plot"></div>
         </div>
+        
+        <script>
+            var distData = {dist_json};
+            var scatterData = {scatter_json};
+            var consistencyData = {consistency_json};
+            var funnelData = {funnel_json};
+            
+            Plotly.newPlot('dist-plot', distData.data, distData.layout);
+            Plotly.newPlot('scatter-plot', scatterData.data, scatterData.layout);
+            Plotly.newPlot('consistency-plot', consistencyData.data, consistencyData.layout);
+            Plotly.newPlot('funnel-plot', funnelData.data, funnelData.layout);
+        </script>
     </div>
 </body>
 </html>"""

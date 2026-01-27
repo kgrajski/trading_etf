@@ -48,12 +48,12 @@ MAX_ACTIVE_TRADES = 10
 
 # Entry parameters
 BOTTOM_PERCENTILE = 0.05  # Bottom 5% losers
-MIN_LOSS_PCNT = 2.0  # Minimum weekly loss to qualify
+MIN_LOSS_PCNT = 6.0  # Minimum weekly loss to qualify (champion: 6%)
 
 # Exit parameters
-STOP_LOSS_PCNT = 16.0
+STOP_LOSS_PCNT = 4.0   # Champion: 4% (tighter stop)
 PROFIT_EXIT_PCNT = 10.0
-MAX_HOLD_WEEKS = 1
+MAX_HOLD_WEEKS = 3     # Champion: 3 weeks
 
 # Regime parameters
 USE_REGIME = True
@@ -61,7 +61,7 @@ REGIME_SYMBOL = "SPY"
 REGIME_MA_PERIOD = 50
 
 # Boost parameters
-BOOST_DIRECTION = "bear"  # Options: "bull", "bear", "none"
+BOOST_DIRECTION = "bull"  # Champion: bull (larger positions in bull markets)
 BOOST_MULTIPLIER = 1.10   # 10% larger positions when condition met
 
 # Analysis parameters

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+from alpaca.data.enums import Adjustment
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -217,6 +218,7 @@ def fetch_daily_bars(
         timeframe=TimeFrame.Day,
         start=start_date,
         end=end_date,
+        adjustment=Adjustment.ALL,  # Adjust for splits AND dividends
     )
 
     try:
