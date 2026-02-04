@@ -403,19 +403,57 @@ def create_chart(
     return out_path
 
 
+def load_ai_analysis(output_dir: Path) -> Dict:
+    """Load AI analyst report if available."""
+    report_path = output_dir / "analyst_report.json"
+    if report_path.exists():
+        try:
+            with open(report_path) as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"  Warning: Could not load AI analysis: {e}")
+    return {}
+
+
 def create_inspector(
     candidates: pd.DataFrame,
     regime: Dict,
     week_str: str,
     output_dir: Path,
 ) -> Path:
-    """Create inspector HTML with trade specs and volatility indicators."""
+    """Create inspector HTML with trade specs, volatility indicators, and AI analysis."""
     
-    # Build table rows with volatility tooltips
+    # Load AI analysis if available
+    ai_analysis = load_ai_analysis(output_dir)
+    has_ai = bool(ai_analysis.get("symbol_analyses"))
+    
+    # Get AI symbol analyses for enriching table
+    symbol_analyses = ai_analysis.get("symbol_analyses", {})
+    review = ai_analysis.get("review_results", {}) or {}
+    top_picks = review.get("top_picks", [])
+    avoid_list = review.get("avoid_list", [])
+    
+    # Build table rows with volatility tooltips and AI badges
     rows_html = []
     for _, t in candidates.iterrows():
+        symbol = t["symbol"]
         color = "negative" if t["pct_return"] < 0 else "positive"
         badge = t.get("risk_badge", "")
+        
+        # Add AI conviction badge if available
+        ai_data = symbol_analyses.get(symbol, {})
+        conviction = ai_data.get("conviction")
+        if conviction is not None:
+            if symbol in top_picks:
+                badge += f' <span class="ai-badge top">⭐{conviction}</span>'
+            elif symbol in avoid_list:
+                badge += f' <span class="ai-badge avoid">⛔{conviction}</span>'
+            elif conviction >= 7:
+                badge += f' <span class="ai-badge high">{conviction}</span>'
+            elif conviction <= 3:
+                badge += f' <span class="ai-badge low">{conviction}</span>'
+            else:
+                badge += f' <span class="ai-badge">{conviction}</span>'
         
         # Build tooltip with vol stats
         sigma = t.get("sigma", np.nan)
@@ -432,8 +470,8 @@ def create_inspector(
         tooltip = " | ".join(tooltip_parts) if tooltip_parts else "No vol data"
         
         rows_html.append(f"""
-        <tr onclick="loadChart('{t['symbol']}')" class="clickable" title="{tooltip}">
-            <td><strong>{t['symbol']}</strong> {badge}</td>
+        <tr onclick="loadChart('{symbol}')" class="clickable" title="{tooltip}" data-symbol="{symbol}">
+            <td><strong>{symbol}</strong> {badge}</td>
             <td>{str(t.get('etf_name', ''))[:22]}</td>
             <td class="{color}">{t['pct_return']:.1f}%</td>
             <td><strong>{t['shares']}</strong></td>
@@ -460,6 +498,21 @@ def create_inspector(
         <ul>{notes_list}</ul>
     </div>"""
     
+    # Build AI analysis button and data
+    ai_button_html = ""
+    ai_data_json = "{}"
+    if has_ai:
+        thematic = ai_analysis.get("thematic_analysis", {})
+        sentiment = thematic.get("overall_sentiment", "unknown").upper()
+        ai_button_html = f'''
+    <div class="ai-section">
+        <button class="ai-btn" onclick="showAIModal()">🤖 AI Market Analysis</button>
+        <span class="ai-sentiment {sentiment.lower()}">{sentiment}</span>
+        <span class="ai-hint">Click for thematic analysis | Symbol insights appear above chart</span>
+    </div>'''
+        # Serialize AI data for JavaScript (escape for embedding)
+        ai_data_json = json.dumps(ai_analysis, default=str).replace("</", "<\\/")
+    
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -475,7 +528,57 @@ def create_inspector(
         .risk-notes {{ background: #fff3cd; border: 1px solid #ffc107; padding: 10px; border-radius: 4px; margin-bottom: 10px; font-size: 13px; }}
         .risk-notes ul {{ margin: 5px 0 0 0; padding-left: 20px; }}
         .risk-notes li {{ margin: 4px 0; }}
-        .container {{ display: flex; gap: 20px; height: calc(100vh - 280px); }}
+        
+        /* AI Section Styles */
+        .ai-section {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px 15px; border-radius: 4px; margin-bottom: 10px; display: flex; align-items: center; gap: 15px; }}
+        .ai-btn {{ background: white; color: #667eea; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 14px; }}
+        .ai-btn:hover {{ background: #f0f0f0; }}
+        .ai-sentiment {{ padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold; }}
+        .ai-sentiment.favorable {{ background: #28A745; }}
+        .ai-sentiment.neutral {{ background: #FFC107; color: #333; }}
+        .ai-sentiment.unfavorable {{ background: #DC3545; }}
+        .ai-sentiment.unknown {{ background: #6c757d; }}
+        .ai-hint {{ font-size: 11px; opacity: 0.8; }}
+        
+        /* AI Badge Styles */
+        .ai-badge {{ display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 10px; font-weight: bold; margin-left: 4px; background: #6c757d; color: white; }}
+        .ai-badge.high {{ background: #28A745; }}
+        .ai-badge.low {{ background: #DC3545; }}
+        .ai-badge.top {{ background: #FFD700; color: #333; }}
+        .ai-badge.avoid {{ background: #DC3545; }}
+        
+        /* Modal Styles */
+        .modal {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }}
+        .modal.active {{ display: flex; }}
+        .modal-content {{ background: white; border-radius: 8px; max-width: 700px; max-height: 80vh; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }}
+        .modal-header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }}
+        .modal-header h2 {{ margin: 0; font-size: 18px; }}
+        .modal-close {{ background: none; border: none; color: white; font-size: 24px; cursor: pointer; }}
+        .modal-body {{ padding: 20px; }}
+        .theme-card {{ background: #f8f9fa; padding: 12px; border-radius: 6px; margin-bottom: 10px; border-left: 4px solid #667eea; }}
+        .theme-card h4 {{ margin: 0 0 5px 0; color: #333; }}
+        .theme-symbols {{ font-size: 12px; color: #666; margin-bottom: 5px; }}
+        .theme-outlook {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }}
+        .theme-outlook.favorable {{ background: #d4edda; color: #155724; }}
+        .theme-outlook.neutral {{ background: #fff3cd; color: #856404; }}
+        .theme-outlook.unfavorable {{ background: #f8d7da; color: #721c24; }}
+        .reviewer-notes {{ background: #e8f4f8; padding: 12px; border-radius: 6px; margin-top: 15px; font-style: italic; }}
+        
+        /* Symbol Overlay Styles */
+        .symbol-overlay {{ display: none; background: rgba(255,255,255,0.97); border-radius: 6px; padding: 12px; margin-bottom: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); border-left: 4px solid #667eea; }}
+        .symbol-overlay.active {{ display: block; }}
+        .symbol-overlay-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }}
+        .symbol-overlay h4 {{ margin: 0; color: #333; }}
+        .conviction-badge {{ padding: 4px 12px; border-radius: 4px; font-weight: bold; color: white; }}
+        .conviction-badge.high {{ background: #28A745; }}
+        .conviction-badge.medium {{ background: #FFC107; color: #333; }}
+        .conviction-badge.low {{ background: #DC3545; }}
+        .symbol-narrative {{ font-size: 13px; line-height: 1.5; margin-bottom: 8px; }}
+        .symbol-pros-cons {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 12px; }}
+        .symbol-pros-cons ul {{ margin: 0; padding-left: 18px; }}
+        .key-risk {{ background: #fff3cd; padding: 6px 10px; border-radius: 4px; font-size: 12px; margin-top: 8px; }}
+        
+        .container {{ display: flex; gap: 20px; height: calc(100vh - {'340' if has_ai else '280'}px); }}
         .sidebar {{ width: 550px; flex-shrink: 0; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; display: flex; flex-direction: column; }}
         .sidebar-header {{ padding: 12px; background: #2E86AB; color: white; font-weight: bold; }}
         .table-container {{ overflow-y: auto; flex: 1; }}
@@ -487,7 +590,8 @@ def create_inspector(
         tr.active {{ background: #d0e8f0 !important; }}
         .negative {{ color: #DC3545; }}
         .positive {{ color: #28A745; }}
-        .chart-container {{ flex: 1; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .chart-area {{ flex: 1; display: flex; flex-direction: column; }}
+        .chart-container {{ flex: 1; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }}
         iframe {{ width: 100%; height: 100%; border: none; }}
         .legend {{ font-size: 11px; color: #666; margin-top: 5px; }}
     </style>
@@ -510,6 +614,7 @@ def create_inspector(
         <span class="legend">| Badges: 🔥 High Vol (σ>{HIGH_VOLATILITY_THRESHOLD}%) | ⚡ High Beta (β>{HIGH_BETA_THRESHOLD}) | 🔄 Inverse (β<0) | Hover row for stats</span>
     </div>
     {risk_notes_html}
+    {ai_button_html}
     <div class="container">
         <div class="sidebar">
             <div class="sidebar-header">Click symbol to view chart (↑↓ to navigate)</div>
@@ -530,18 +635,126 @@ def create_inspector(
                 </table>
             </div>
         </div>
-        <div class="chart-container">
-            <iframe id="chart" src="charts/{first_symbol}.html"></iframe>
+        <div class="chart-area">
+            <div class="symbol-overlay" id="symbolOverlay"></div>
+            <div class="chart-container">
+                <iframe id="chart" src="charts/{first_symbol}.html"></iframe>
+            </div>
         </div>
     </div>
+    
+    <!-- AI Analysis Modal -->
+    <div class="modal" id="aiModal" onclick="if(event.target===this)hideAIModal()">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>🤖 AI Market Analysis</h2>
+                <button class="modal-close" onclick="hideAIModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="aiModalBody">
+                <!-- Populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+    
     <script>
+        // AI Analysis Data (embedded)
+        const aiData = {ai_data_json};
+        const hasAI = {'true' if has_ai else 'false'};
+        
         function loadChart(s) {{
             document.getElementById('chart').src = 'charts/' + s + '.html';
             document.querySelectorAll('#tbl tr').forEach(r => r.classList.remove('active'));
             event.currentTarget.classList.add('active');
+            
+            // Show symbol AI overlay if available
+            if (hasAI) {{
+                showSymbolOverlay(s);
+            }}
         }}
+        
+        function showSymbolOverlay(symbol) {{
+            const overlay = document.getElementById('symbolOverlay');
+            const analysis = aiData.symbol_analyses?.[symbol];
+            
+            if (!analysis) {{
+                overlay.classList.remove('active');
+                return;
+            }}
+            
+            const conviction = analysis.conviction || 5;
+            const convClass = conviction >= 7 ? 'high' : conviction <= 3 ? 'low' : 'medium';
+            const rec = analysis.recommendation || 'HOLD';
+            const narrative = analysis.narrative || '';
+            const pros = (analysis.pros || []).map(p => `<li>✅ ${{p}}</li>`).join('');
+            const cons = (analysis.cons || []).map(c => `<li>⚠️ ${{c}}</li>`).join('');
+            const keyRisk = analysis.key_risk || '';
+            const adjusted = analysis.conviction_adjusted_by_reviewer;
+            const adjustNote = adjusted ? `<br><small>Adjusted from ${{analysis.conviction_original}} by reviewer: ${{analysis.adjustment_reason}}</small>` : '';
+            
+            overlay.innerHTML = `
+                <div class="symbol-overlay-header">
+                    <h4>🤖 AI Analysis: ${{symbol}}</h4>
+                    <span class="conviction-badge ${{convClass}}">${{conviction}}/10 ${{rec}}</span>
+                </div>
+                <div class="symbol-narrative">${{narrative}}${{adjustNote}}</div>
+                <div class="symbol-pros-cons">
+                    <div><strong>Pros:</strong><ul>${{pros || '<li>None</li>'}}</ul></div>
+                    <div><strong>Cons:</strong><ul>${{cons || '<li>None</li>'}}</ul></div>
+                </div>
+                ${{keyRisk ? `<div class="key-risk"><strong>Key Risk:</strong> ${{keyRisk}}</div>` : ''}}
+            `;
+            overlay.classList.add('active');
+        }}
+        
+        function showAIModal() {{
+            const modal = document.getElementById('aiModal');
+            const body = document.getElementById('aiModalBody');
+            
+            const thematic = aiData.thematic_analysis || {{}};
+            const review = aiData.review_results || {{}};
+            const themes = thematic.themes || [];
+            const summary = thematic.summary || 'No summary available';
+            const sentiment = thematic.overall_sentiment || 'unknown';
+            const reviewerNotes = review.reviewer_notes || '';
+            const topPicks = (review.top_picks || []).join(', ') || 'None';
+            const avoidList = (review.avoid_list || []).join(', ') || 'None';
+            
+            let themesHtml = themes.map(t => `
+                <div class="theme-card">
+                    <h4>${{t.name}}</h4>
+                    <div class="theme-symbols">Symbols: ${{(t.symbols || []).join(', ')}}</div>
+                    <p>${{t.narrative || ''}}</p>
+                    <span class="theme-outlook ${{t.mean_reversion_outlook || 'neutral'}}">${{(t.mean_reversion_outlook || 'neutral').toUpperCase()}}</span>
+                </div>
+            `).join('');
+            
+            body.innerHTML = `
+                <p><strong>Summary:</strong> ${{summary}}</p>
+                <p><strong>Overall Sentiment:</strong> <span class="theme-outlook ${{sentiment}}">${{sentiment.toUpperCase()}}</span></p>
+                <h3>Themes</h3>
+                ${{themesHtml || '<p>No themes identified</p>'}}
+                <h3>Reviewer Assessment</h3>
+                <p><strong>Top Picks:</strong> ${{topPicks}}</p>
+                <p><strong>Avoid:</strong> ${{avoidList}}</p>
+                ${{reviewerNotes ? `<div class="reviewer-notes"><strong>Notes:</strong> ${{reviewerNotes}}</div>` : ''}}
+            `;
+            
+            modal.classList.add('active');
+        }}
+        
+        function hideAIModal() {{
+            document.getElementById('aiModal').classList.remove('active');
+        }}
+        
+        // Initialize
         document.querySelector('#tbl tr')?.classList.add('active');
+        if (hasAI) {{
+            const firstSymbol = document.querySelector('#tbl tr')?.dataset.symbol;
+            if (firstSymbol) showSymbolOverlay(firstSymbol);
+        }}
+        
         document.addEventListener('keydown', e => {{
+            if (e.key === 'Escape') {{ hideAIModal(); return; }}
             const rows = Array.from(document.querySelectorAll('#tbl tr'));
             const idx = rows.findIndex(r => r.classList.contains('active'));
             if (e.key === 'ArrowDown' && idx < rows.length - 1) {{ e.preventDefault(); rows[idx+1].click(); rows[idx+1].scrollIntoView({{block:'nearest'}}); }}
