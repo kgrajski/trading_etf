@@ -19,32 +19,23 @@ The entire pipeline runs via a single script (`scripts/weekly_update.sh`) and co
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     WEEKLY PIPELINE                                  │
-│                                                                      │
-│  Data Fetch → Feature Engineering → Backtest → Trade Generation     │
-│       (Alpaca)      (pandas)        (custom)     (ranked candidates) │
-│                                                                      │
-│                              ↓                                       │
-│                                                                      │
-│              ┌─────────────────────────────────┐                     │
-│              │     AGENTIC AI ANALYST           │                     │
-│              │                                  │                     │
-│              │  load → fetch_news → themes      │                     │
-│              │           (Tavily)    (LLM)      │                     │
-│              │                         ↓        │                     │
-│              │              analyze_symbols      │                     │
-│              │                (LLM × N)         │                     │
-│              │                    ↓              │                     │
-│              │           review_and_refine       │                     │
-│              │          (LLM - Reflection)       │                     │
-│              └─────────────────────────────────┘                     │
-│                              ↓                                       │
-│                                                                      │
-│              Interactive Dashboard (_inspector.html)                  │
-│              MLflow Experiment Tracking                               │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph pipeline ["Weekly Pipeline"]
+        A["Data Fetch\n(Alpaca API)"] --> B["Feature Engineering\n(pandas)"]
+        B --> C["Backtest\n(mean-reversion)"]
+        C --> D["Trade Generation\n(ranked candidates)"]
+    end
+
+    subgraph agent ["Agentic AI Analyst"]
+        E["load"] --> F["fetch_news\n(Tavily Search)"]
+        F --> G["analyze_themes\n(LLM)"]
+        G --> H["analyze_symbols\n(LLM × N)"]
+        H --> I["review_and_refine\n(LLM — Reflection)"]
+    end
+
+    D --> E
+    I --> J["Interactive Dashboard\n+ MLflow Tracking"]
 ```
 
 ## Agentic AI — The Interesting Part
