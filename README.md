@@ -22,20 +22,20 @@ The entire pipeline runs via a single script (`scripts/weekly_update.sh`) and co
 ```mermaid
 flowchart TD
     subgraph pipeline ["Weekly Pipeline"]
-        A["Data Fetch\n(Alpaca API)"] --> B["Feature Engineering\n(pandas)"]
-        B --> C["Backtest\n(mean-reversion)"]
-        C --> D["Trade Generation\n(ranked candidates)"]
+        A["Data Fetch<br>(Alpaca API)"] --> B["Feature Engineering<br>(pandas)"]
+        B --> C["Backtest<br>(mean-reversion)"]
+        C --> D["Trade Generation<br>(ranked candidates)"]
     end
 
     subgraph agent ["Agentic AI Analyst"]
-        E["load"] --> F["fetch_news\n(Tavily Search)"]
-        F --> G["analyze_themes\n(LLM)"]
-        G --> H["analyze_symbols\n(LLM × N)"]
-        H --> I["review_and_refine\n(LLM — Reflection)"]
+        E["load"] --> F["fetch_news<br>(Tavily Search)"]
+        F --> G["analyze_themes<br>(LLM)"]
+        G --> H["analyze_symbols<br>(LLM × N)"]
+        H --> I["review_and_refine<br>(LLM — Reflection)"]
     end
 
     D --> E
-    I --> J["Interactive Dashboard\n+ MLflow Tracking"]
+    I --> J["Interactive Dashboard<br>+ MLflow Tracking"]
 ```
 
 ## Agentic AI — The Interesting Part
