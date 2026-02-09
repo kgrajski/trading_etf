@@ -35,3 +35,10 @@ torch>=2.0.0
 
 # parallel processing
 ray[tune]>=2.0.0
+
+# agentic AI analyst
+langgraph>=0.2.0
+langchain-openai>=0.2.0
+langchain-google-genai>=2.0.0
+tavily-python>=0.4.0
+mlflow>=2.0.0

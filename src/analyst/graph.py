@@ -614,18 +614,26 @@ def analyze_themes(state: AnalystState) -> AnalystState:
             if "error" not in article:
                 news_summary.append(f"[{symbol}] {article.get('title', '')}")
     
-    prompt = f"""You are an ETF market analyst. Analyze these trade candidates that showed significant losses this week.
+    prompt = f"""You are a NEWS ANALYST for an ETF trading desk. Your job is purely QUALITATIVE — to interpret recent news, NOT to analyze quantitative metrics.
+
+CONTEXT: These ETFs have been selected by our quantitative system as mean-reversion candidates (they dropped significantly this week). Our strategy holds positions for 1-3 weeks, targeting a bounce.
+
+Your task is to assess the NEWS LANDSCAPE — specifically, whether the news suggests these drops are:
+- TRANSIENT (sentiment-driven, profit-taking, overreaction to minor news) → likely to revert
+- STRUCTURAL (regulatory change, sector rotation, fundamental shift) → may not revert quickly
 
 CANDIDATES:
 {chr(10).join(candidates_summary)}
 
-RECENT NEWS:
+RECENT NEWS HEADLINES:
 {chr(10).join(news_summary) if news_summary else "No news available"}
 
-TASK:
-1. Identify 2-4 thematic groups among these ETFs (e.g., "Precious Metals", "Crypto", "Tech", "Healthcare")
-2. For each theme, explain what's driving the losses based on available news
-3. Rate overall market sentiment for mean-reversion strategies: Favorable / Neutral / Unfavorable
+ANALYSIS TASK:
+1. Group these ETFs into 2-4 themes based on what's in the NEWS (not sector classification)
+2. For each theme, assess: Is the news driving these drops TRANSIENT or STRUCTURAL?
+3. Identify any upcoming qualitative catalysts (Fed meetings, policy announcements, geopolitical events) that could affect recovery in the next 1-3 weeks
+
+DO NOT comment on quantitative metrics (volatility, beta, etc.) — that's handled by our quant system.
 
 Respond in JSON format:
 {{
@@ -633,12 +641,14 @@ Respond in JSON format:
         {{
             "name": "Theme Name",
             "symbols": ["SYM1", "SYM2"],
-            "narrative": "Brief explanation of what's happening",
-            "mean_reversion_outlook": "favorable/neutral/unfavorable"
+            "news_driver": "What news/event caused these drops",
+            "drop_type": "transient/structural/unclear",
+            "narrative": "2-3 sentences on whether news suggests this will revert in 1-3 weeks"
         }}
     ],
-    "overall_sentiment": "favorable/neutral/unfavorable",
-    "summary": "2-3 sentence overall market summary"
+    "upcoming_catalysts": ["catalyst1", "catalyst2"],
+    "overall_news_assessment": "favorable/mixed/unfavorable",
+    "summary": "2-3 sentence summary focused on NEWS interpretation, not quant factors"
 }}
 """
 
@@ -703,29 +713,42 @@ def analyze_symbols(state: AnalystState) -> AnalystState:
                     "url": article.get("url", "")
                 })
         
-        prompt = f"""You are an ETF analyst evaluating a mean-reversion trade candidate.
+        prompt = f"""You are a NEWS ANALYST providing a QUALITATIVE assessment for a trade candidate.
 
 SYMBOL: {symbol}
 NAME: {name}
-WEEKLY RETURN: {ret:.2f}%
-VOLATILITY (σ): {f"{sigma:.1f}%" if sigma else "N/A"}
-BETA: {f"{beta:.2f}" if beta else "N/A"}
+WEEKLY RETURN: {ret:.2f}% (this is why our quant system flagged it as a mean-reversion candidate)
 
-RECENT NEWS:
+RECENT NEWS FOR THIS SYMBOL:
 {news_text if news_text else "No recent news found"}
 
-CONTEXT: This ETF appeared in our "worst performers" list. We're considering buying it expecting mean reversion (price recovery).
+CONTEXT: 
+- Our quantitative system has ALREADY selected this as a trade candidate based on metrics
+- We hold positions for 1-3 weeks, targeting a price bounce
+- Your job is to assess the NEWS only — is there anything in the news that suggests this drop WON'T revert?
 
-TASK: Provide a brief analysis in JSON format:
+QUALITATIVE ASSESSMENT TASK:
+Based ONLY on the news (not on price, volatility, or other quant factors):
+
+1. What caused this drop according to the news?
+2. Is the news TRANSIENT (overreaction, sentiment) or STRUCTURAL (fundamental change)?
+3. Are there any RED FLAGS in the news that suggest avoiding this trade?
+
+Respond in JSON format:
 {{
-    "conviction": 1-10 (1=strong avoid, 5=neutral, 10=strong buy),
-    "recommendation": "BUY/HOLD/AVOID",
-    "pros": ["pro1", "pro2"],
-    "cons": ["con1", "con2"],
-    "narrative": "2-3 sentence analysis",
-    "mean_reversion_likelihood": "high/medium/low",
-    "key_risk": "single most important risk"
+    "flag": "GREEN/YELLOW/RED",
+    "flag_reason": "One sentence explaining the flag",
+    "news_summary": "What the news says caused this drop",
+    "drop_assessment": "transient/structural/unclear",
+    "bullish_signals": ["news item suggesting bounce"],
+    "bearish_signals": ["news item suggesting continued decline"],
+    "key_concern": "Single biggest qualitative concern, or 'none' if GREEN"
 }}
+
+FLAG GUIDELINES:
+- GREEN: News suggests drop is overdone/transient, no red flags
+- YELLOW: Mixed signals, some concerns but not disqualifying  
+- RED: News suggests structural issue or ongoing catalyst — consider skipping this trade
 """
         
         try:
@@ -741,16 +764,19 @@ TASK: Provide a brief analysis in JSON format:
             analysis["citations"] = citations
             state["symbol_analyses"][symbol] = analysis
             
-            print(f"    {symbol}: conviction={analysis.get('conviction', '?')}/10")
+            flag = analysis.get('flag', '?')
+            print(f"    {symbol}: {flag} - {analysis.get('flag_reason', '')[:50]}")
             
         except Exception as e:
             state["errors"].append(f"Symbol {symbol} analysis error: {str(e)}")
             state["symbol_analyses"][symbol] = {
-                "conviction": 5,
-                "recommendation": "HOLD",
-                "pros": [],
-                "cons": ["Analysis failed"],
-                "narrative": f"Error: {str(e)}",
+                "flag": "YELLOW",
+                "flag_reason": "Analysis failed",
+                "news_summary": f"Error: {str(e)}",
+                "drop_assessment": "unclear",
+                "bullish_signals": [],
+                "bearish_signals": ["Analysis failed"],
+                "key_concern": "Unable to assess news",
                 "citations": citations
             }
     
@@ -804,16 +830,17 @@ def review_and_refine(state: AnalystState) -> AnalystState:
     themes_text = ""
     for theme in thematic.get("themes", []):
         themes_text += f"- {theme.get('name')}: {', '.join(theme.get('symbols', []))}\n"
-        themes_text += f"  Narrative: {theme.get('narrative', 'N/A')}\n"
-        themes_text += f"  Outlook: {theme.get('mean_reversion_outlook', 'N/A')}\n"
+        themes_text += f"  News Driver: {theme.get('news_driver', theme.get('narrative', 'N/A'))}\n"
+        themes_text += f"  Drop Type: {theme.get('drop_type', theme.get('mean_reversion_outlook', 'N/A'))}\n"
     
     # Format symbol analyses summary
     symbols_text = ""
     for symbol, analysis in symbol_analyses.items():
-        symbols_text += f"- {symbol}: Conviction {analysis.get('conviction', '?')}/10, "
-        symbols_text += f"Rec: {analysis.get('recommendation', '?')}\n"
-        symbols_text += f"  Narrative: {analysis.get('narrative', 'N/A')}\n"
-        symbols_text += f"  Key Risk: {analysis.get('key_risk', 'N/A')}\n"
+        flag = analysis.get('flag', analysis.get('recommendation', '?'))
+        symbols_text += f"- {symbol}: {flag}\n"
+        symbols_text += f"  Reason: {analysis.get('flag_reason', analysis.get('narrative', 'N/A'))}\n"
+        symbols_text += f"  Drop Assessment: {analysis.get('drop_assessment', 'N/A')}\n"
+        symbols_text += f"  Key Concern: {analysis.get('key_concern', analysis.get('key_risk', 'N/A'))}\n"
     
     # Get news headlines for context
     news_context = []
@@ -822,53 +849,54 @@ def review_and_refine(state: AnalystState) -> AnalystState:
             if "error" not in article:
                 news_context.append(f"[{symbol}] {article.get('title', '')}")
     
-    prompt = f"""You are a SENIOR ETF ANALYST reviewing a junior analyst's work.
+    prompt = f"""You are a SENIOR NEWS ANALYST reviewing a junior analyst's qualitative assessments.
 
-Your role is to:
-1. Check for logical consistency
-2. Identify red flags or potential errors
-3. Spot overconfidence or missed risks
-4. Suggest conviction adjustments where warranted
+IMPORTANT: Your review is QUALITATIVE ONLY. Do not second-guess the quantitative trade selection — that's handled by our quant system. Focus on whether the NEWS interpretation is sound.
 
 === THEMATIC ANALYSIS TO REVIEW ===
-Overall Sentiment: {thematic.get('overall_sentiment', 'unknown')}
+News Assessment: {thematic.get('overall_news_assessment', thematic.get('overall_sentiment', 'unknown'))}
 Summary: {thematic.get('summary', 'N/A')}
 
 Themes:
 {themes_text if themes_text else "No themes identified"}
 
-=== SYMBOL RECOMMENDATIONS TO REVIEW ===
+=== SYMBOL ASSESSMENTS TO REVIEW ===
 {symbols_text if symbols_text else "No symbols analyzed"}
 
-=== NEWS CONTEXT ===
+=== NEWS HEADLINES FOR REFERENCE ===
 {chr(10).join(news_context) if news_context else "No news available"}
 
 === YOUR REVIEW TASK ===
-Provide your review in JSON format:
+
+Review the junior analyst's NEWS interpretations:
+1. Are the flag assignments (GREEN/YELLOW/RED) justified by the news?
+2. Did they miss any important news signals?
+3. Are they being appropriately cautious about structural vs transient drops?
+4. Which symbols have the clearest qualitative cases (best/worst)?
+
+Respond in JSON format:
 {{
-    "overall_assessment": "APPROVE/NEEDS_REVISION/REJECT",
-    "confidence_in_analysis": 1-10,
-    "thematic_review": {{
-        "is_consistent": true/false,
-        "issues": ["issue1", "issue2"],
-        "suggestions": "any improvements"
-    }},
-    "symbol_adjustments": [
+    "overall_assessment": "APPROVE/NEEDS_REVISION",
+    "quality_score": 1-10,
+    "flag_adjustments": [
         {{
             "symbol": "XYZ",
-            "original_conviction": 7,
-            "adjusted_conviction": 5,
-            "adjustment_reason": "why you changed it"
+            "original_flag": "GREEN",
+            "adjusted_flag": "YELLOW",
+            "reason": "Missed the regulatory news that suggests ongoing pressure"
         }}
     ],
-    "red_flags": ["any serious concerns"],
-    "top_picks": ["SYM1", "SYM2"],
-    "avoid_list": ["SYM3"],
-    "reviewer_notes": "2-3 sentence summary of your review"
+    "missed_signals": ["Any news the junior analyst should have caught"],
+    "strongest_candidates": ["SYM1", "SYM2"],
+    "weakest_candidates": ["SYM3"],
+    "reviewer_notes": "2-3 sentence summary of news landscape and key concerns"
 }}
 
-Be critical but fair. Only adjust convictions if there's a clear reason.
-Flag any ETFs where the analysis seems inconsistent with the news.
+GUIDELINES:
+- Only adjust flags if the NEWS clearly supports a different assessment
+- "strongest_candidates" = GREEN flags with clearest transient drop signals
+- "weakest_candidates" = RED flags or structural concerns
+- Do NOT comment on quantitative factors (that's not your domain)
 """
 
     try:
@@ -883,34 +911,37 @@ Flag any ETFs where the analysis seems inconsistent with the news.
         review = json.loads(content)
         state["review_results"] = review
         
-        # Apply conviction adjustments to symbol analyses
-        adjustments = review.get("symbol_adjustments", [])
+        # Apply flag adjustments to symbol analyses
+        adjustments = review.get("flag_adjustments", [])
         for adj in adjustments:
             symbol = adj.get("symbol")
             if symbol and symbol in state["symbol_analyses"]:
-                original = state["symbol_analyses"][symbol].get("conviction", 5)
-                adjusted = adj.get("adjusted_conviction", original)
+                original = state["symbol_analyses"][symbol].get("flag", "YELLOW")
+                adjusted = adj.get("adjusted_flag", original)
                 if original != adjusted:
-                    state["symbol_analyses"][symbol]["conviction_original"] = original
-                    state["symbol_analyses"][symbol]["conviction"] = adjusted
-                    state["symbol_analyses"][symbol]["conviction_adjusted_by_reviewer"] = True
-                    state["symbol_analyses"][symbol]["adjustment_reason"] = adj.get("adjustment_reason", "")
-                    print(f"    {symbol}: conviction adjusted {original} → {adjusted}")
+                    state["symbol_analyses"][symbol]["flag_original"] = original
+                    state["symbol_analyses"][symbol]["flag"] = adjusted
+                    state["symbol_analyses"][symbol]["flag_adjusted_by_reviewer"] = True
+                    state["symbol_analyses"][symbol]["adjustment_reason"] = adj.get("reason", "")
+                    print(f"    {symbol}: flag adjusted {original} → {adjusted}")
         
         print(f"  Review complete: {review.get('overall_assessment', 'N/A')}")
-        print(f"  Top picks: {', '.join(review.get('top_picks', []))}")
-        if review.get('avoid_list'):
-            print(f"  Avoid: {', '.join(review.get('avoid_list', []))}")
+        strongest = review.get('strongest_candidates', review.get('top_picks', []))
+        weakest = review.get('weakest_candidates', review.get('avoid_list', []))
+        if strongest:
+            print(f"  Strongest (GREEN): {', '.join(strongest)}")
+        if weakest:
+            print(f"  Weakest (concerns): {', '.join(weakest)}")
         
     except Exception as e:
         state["errors"].append(f"Review error: {str(e)}")
         state["review_results"] = {
             "overall_assessment": "ERROR",
-            "confidence_in_analysis": 0,
+            "quality_score": 0,
             "reviewer_notes": f"Review failed: {str(e)}",
-            "red_flags": [],
-            "top_picks": [],
-            "avoid_list": [],
+            "missed_signals": [],
+            "strongest_candidates": [],
+            "weakest_candidates": [],
         }
     
     if node_context:

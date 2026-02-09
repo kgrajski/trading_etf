@@ -5,6 +5,14 @@ Run the Agentic ETF Trading Analyst.
 Usage:
     python -m src.analyst.run <candidates_csv>
     python -m src.analyst.run experiments/exp019_3_trades/2026-02-03/candidates.csv
+
+MLflow Integration:
+    Results are automatically logged to MLflow when the mlflow package is
+    installed. View the tracking UI with:
+        mlflow ui --port 5000
+    Then open http://localhost:5000
+
+    On Databricks, MLflow tracking is built-in — no setup needed.
 """
 import json
 import sys
@@ -19,6 +27,13 @@ from src.analyst.graph import (
     export_graph_visualization,
     print_graph_info,
 )
+
+# MLflow integration (optional — graceful fallback if not installed)
+try:
+    import mlflow
+    HAS_MLFLOW = True
+except ImportError:
+    HAS_MLFLOW = False
 
 
 def _generate_usage_footer(results: dict) -> str:
@@ -430,6 +445,101 @@ def generate_html_report(results: dict, candidates: list, output_dir: Path) -> P
     return output_path
 
 
+def _log_to_mlflow(
+    results: dict,
+    candidates: list,
+    csv_path: Path,
+    output_dir: Path,
+    artifact_paths: dict,
+):
+    """
+    Log analyst run to MLflow.
+    
+    Logs:
+        Params  - model, candidate count, week, csv source
+        Metrics - tokens, cost, latency, throughput, flag distribution
+        Artifacts - analyst_report.json, analyst_report.html
+    """
+    if not HAS_MLFLOW:
+        return
+    
+    mlflow.set_experiment("etf-trading-analyst")
+    
+    # Extract data from results
+    usage = results.get("usage", {})
+    metrics_data = results.get("metrics", {})
+    review = results.get("review_results", {}) or {}
+    symbol_analyses = results.get("symbol_analyses", {})
+    thematic = results.get("thematic_analysis", {})
+    
+    # Count flags
+    flags = [a.get("flag", "YELLOW") for a in symbol_analyses.values()]
+    green_count = flags.count("GREEN")
+    yellow_count = flags.count("YELLOW")
+    red_count = flags.count("RED")
+    
+    # Count reviewer adjustments
+    adjustments = sum(
+        1 for a in symbol_analyses.values()
+        if a.get("flag_adjusted_by_reviewer")
+    )
+    
+    with mlflow.start_run(run_name=f"analyst_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+        # --- Params (static configuration for this run) ---
+        mlflow.log_params({
+            "model": results.get("model", "unknown"),
+            "n_candidates": len(candidates),
+            "week": candidates[0].get("week_start", "unknown") if candidates else "unknown",
+            "csv_source": str(csv_path.name),
+            "reviewer_assessment": review.get("overall_assessment", "N/A"),
+        })
+        
+        # --- Metrics (numeric measurements) ---
+        run_metrics = {
+            # Token usage
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+            "total_tokens": usage.get("total_tokens", 0),
+            "llm_calls": usage.get("calls", 0),
+            
+            # Flag distribution
+            "green_count": green_count,
+            "yellow_count": yellow_count,
+            "red_count": red_count,
+            "reviewer_adjustments": adjustments,
+            
+            # Themes
+            "n_themes": len(thematic.get("themes", [])),
+        }
+        
+        # Add instrumentation metrics if available
+        if metrics_data:
+            run_metrics.update({
+                "cost_usd": metrics_data.get("cost", {}).get("total_usd", 0),
+                "cost_per_symbol_usd": metrics_data.get("cost", {}).get("per_symbol_usd", 0),
+                "duration_seconds": metrics_data.get("latency", {}).get("total_seconds", 0),
+                "tokens_per_second": metrics_data.get("throughput", {}).get("tokens_per_second", 0),
+                "symbols_per_minute": metrics_data.get("throughput", {}).get("symbols_per_minute", 0),
+                "llm_pct": metrics_data.get("latency", {}).get("breakdown_pct", {}).get("llm", 0),
+                "tool_pct": metrics_data.get("latency", {}).get("breakdown_pct", {}).get("tool", 0),
+            })
+        
+        mlflow.log_metrics(run_metrics)
+        
+        # --- Artifacts (files) ---
+        for name, path in artifact_paths.items():
+            if path and Path(path).exists():
+                mlflow.log_artifact(str(path))
+        
+        # Log the input CSV as well
+        if csv_path.exists():
+            mlflow.log_artifact(str(csv_path))
+        
+        run_id = mlflow.active_run().info.run_id
+        print(f"\n📊 MLflow: Run logged (experiment='etf-trading-analyst', run_id={run_id[:8]}...)")
+        print(f"   View at: mlflow ui --port 5000  →  http://localhost:5000")
+
+
 def main():
     """
     Main entry point for the ETF Trading Analyst.
@@ -530,6 +640,18 @@ def main():
         print(f"  {log_name.replace('_', ' ').title()}: {log_path}")
     
     print("=" * 60)
+    
+    # Log to MLflow
+    _log_to_mlflow(
+        results=results,
+        candidates=candidates,
+        csv_path=csv_path,
+        output_dir=output_dir,
+        artifact_paths={
+            "analyst_report_json": str(json_path),
+            "analyst_report_html": str(html_path),
+        },
+    )
     
     # Open HTML report
     if platform.system() == "Darwin":

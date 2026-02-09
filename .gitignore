@@ -56,6 +56,11 @@ env/
 # Logs - runtime output
 /logs/
 
+# MLflow - local tracking data
+mlflow.db
+mlruns/
+mlartifacts/
+
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
