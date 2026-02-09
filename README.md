@@ -1,4 +1,5 @@
 # ETF Weekly Trading System with Agentic AI Analyst
+## R&D Workbench Purposes Only
 
 A research-to-production platform for developing, backtesting, and operating a weekly ETF trading strategy — augmented by an **agentic AI analyst** built with LangGraph that provides qualitative news-driven assessments of trade candidates.
 
