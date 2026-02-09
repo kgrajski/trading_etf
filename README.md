@@ -1,131 +1,197 @@
-# Trading ETF
+# ETF Weekly Trading System with Agentic AI Analyst
 
-ETF Weekly Trading Strategy with Back-Testing
+A research-to-production platform for developing, backtesting, and operating a weekly ETF trading strategy — augmented by an **agentic AI analyst** built with LangGraph that provides qualitative news-driven assessments of trade candidates.
 
-## Overview
+## What This Project Does
 
-This project implements a research and development workbench for developing and testing simple trading strategies for a population of ETFs by analyzing historical weekly pricing and volume data. The goal is to generate ranked recommendations for week-ahead trading periods together with anticipated gain.
+Each week, the system:
+
+1. **Fetches** daily market data for ~2,200 ETFs (Alpaca API)
+2. **Engineers** features — returns, volatility, momentum, cyclical encodings
+3. **Backtests** a mean-reversion strategy to validate parameters
+4. **Generates** ranked trade candidates with entry/exit prices and position sizes
+5. **Runs an AI analyst** that searches financial news, assesses each candidate, and produces a qualitative overlay (GREEN / YELLOW / RED flags)
+6. **Produces** an interactive HTML dashboard combining quantitative and qualitative signals
+
+The entire pipeline runs via a single script (`scripts/weekly_update.sh`) and completes in ~10 minutes.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     WEEKLY PIPELINE                                  │
+│                                                                      │
+│  Data Fetch → Feature Engineering → Backtest → Trade Generation     │
+│       (Alpaca)      (pandas)        (custom)     (ranked candidates) │
+│                                                                      │
+│                              ↓                                       │
+│                                                                      │
+│              ┌─────────────────────────────────┐                     │
+│              │     AGENTIC AI ANALYST           │                     │
+│              │                                  │                     │
+│              │  load → fetch_news → themes      │                     │
+│              │           (Tavily)    (LLM)      │                     │
+│              │                         ↓        │                     │
+│              │              analyze_symbols      │                     │
+│              │                (LLM × N)         │                     │
+│              │                    ↓              │                     │
+│              │           review_and_refine       │                     │
+│              │          (LLM - Reflection)       │                     │
+│              └─────────────────────────────────┘                     │
+│                              ↓                                       │
+│                                                                      │
+│              Interactive Dashboard (_inspector.html)                  │
+│              MLflow Experiment Tracking                               │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## Agentic AI — The Interesting Part
+
+The analyst (`src/analyst/`) implements a **LangGraph workflow** with the **Reflection Pattern**:
+
+| Node | What It Does | Tool / Model |
+|------|-------------|-------------|
+| `load` | Initialize state | — |
+| `fetch_news` | Search financial news per symbol | Tavily API |
+| `analyze_themes` | Identify macro themes across candidates | LLM (Gemini / GPT) |
+| `analyze_symbols` | Per-symbol qualitative assessment | LLM × N candidates |
+| `review_and_refine` | **Reflection** — senior analyst reviews junior's work, adjusts flags | LLM (optionally different model) |
+
+**Key design choices:**
+
+- **Reflection Pattern**: The reviewer node critiques the initial analysis, catches inconsistencies, and adjusts conviction flags — mimicking a senior/junior analyst dynamic
+- **Multi-Model Routing**: Different LLMs for analysis vs. review (e.g., Gemini Flash for bulk, GPT-4o for critical review). Configurable via environment variables
+- **Qualitative-Only Scope**: The agent assesses *news*, not quant metrics. It answers: "Is this drop transient or structural?" The quant system handles everything else
+- **MLflow Integration**: Every run logs parameters, token usage, costs, flag distributions, and artifacts
+
+### Databricks Deployment
+
+The agent has been ported to a self-contained Databricks notebook (`notebooks/analyst_databricks.py`) with:
+- Widget-based API key configuration
+- Native MLflow experiment tracking
+- `displayHTML()` for interactive reports
+- Zero dependencies on the local `src/` package structure
+
+---
 
 ## Project Structure
 
 ```
 trading_etf/
+├── scripts/
+│   └── weekly_update.sh          # One-command weekly pipeline
 ├── src/
-│   ├── data/              # Data sources, ETL, feature engineering
-│   ├── strategies/        # Trading strategy implementations
-│   ├── backtesting/       # Portfolio backtesting engine
-│   ├── visualization/     # Results visualization
-│   └── workflow/          # Workflow scripts
-├── data/
-│   ├── external/          # Raw weekly data by symbol
-│   ├── interim/           # Standardized weekly data
-│   ├── processed/         # Features added
-│   └── metadata/          # Symbol metadata, filters
-├── experiments/           # Experiment configs and results
-└── reports/               # Generated reports and visualizations
+│   ├── analyst/                   # Agentic AI analyst
+│   │   ├── graph.py              #   LangGraph workflow (5 nodes)
+│   │   ├── run.py                #   CLI entry point + MLflow logging
+│   │   ├── instrumentation.py    #   Detailed metrics (tokens, cost, latency)
+│   │   ├── logging_config.py     #   Trace logging (full prompts/responses)
+│   │   └── tools/
+│   │       └── search.py         #   Tavily web search tool
+│   ├── data/                      # Data sources, ETL, feature engineering
+│   │   ├── alpaca_source.py      #   Alpaca Markets API integration
+│   │   ├── weekly_feature_engineering.py
+│   │   └── ...
+│   ├── backtesting/               # Strategy backtesting engine
+│   │   ├── mean_reversion_backtester.py
+│   │   └── portfolio_backtester.py
+│   ├── strategies/                # Trading strategies
+│   ├── training/                  # ML model training (sklearn, XGBoost, PyTorch)
+│   ├── visualization/             # Plotly-based visualizations
+│   └── workflow/
+│       ├── pipeline/              # Production pipeline scripts (00–21b)
+│       └── research/              # Research & experimentation scripts (06–22)
+├── notebooks/
+│   ├── analyst_databricks.py     # Databricks notebook (self-contained)
+│   ├── analyst_databricks_confirmed.py  # Validated on Databricks
+│   ├── test_local.py             # Local validation runner
+│   └── sample_candidates.csv     # Sample data for testing
+├── data/                          # Generated: market data (gitignored)
+├── experiments/                   # Generated: experiment results (gitignored)
+├── pre_production/                # Generated: weekly trade candidates (gitignored)
+└── requirements.txt
 ```
+
+## Research Journey
+
+This project evolved through several phases:
+
+1. **Momentum strategies** — classic trend-following with grid search over lookback windows, volume thresholds, and position sizing
+2. **ML classification** — scikit-learn, XGBoost, and PyTorch models predicting weekly direction. Explored rolling cross-validation, regime detection, and feature importance
+3. **Mean-reversion** — the current strategy. Buy ETFs that dropped significantly (>2σ), targeting a 1–3 week bounce. Backtested across ~2,200 symbols with parameter optimization
+4. **Agentic AI overlay** — LangGraph-based analyst that adds qualitative news assessment on top of the quantitative signal
+5. **Databricks deployment** — ported the agent to Databricks with MLflow tracking
+
+The `src/workflow/research/` directory contains 25+ experiment scripts documenting this evolution.
+
+---
 
 ## Quick Start
 
-### 1. Set Up Environment
+### Prerequisites
+
+- Python 3.11+
+- API keys: [Alpaca](https://alpaca.markets/) (market data), [Tavily](https://tavily.com/) (news search), and one of: [Google AI](https://ai.google.dev/) (Gemini) or [OpenAI](https://platform.openai.com/) (GPT)
+
+### Setup
 
 ```bash
-# Create virtual environment
+git clone https://github.com/kgrajski/trading_etf.git
+cd trading_etf
+
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dependencies
+source .venv/bin/activate
 pip install -r requirements.txt
-pip install -e .
 ```
 
-### 2. Configure Alpaca API
-
-Create a `.env` file in the project root:
+Create a `.env` file:
 
 ```
-APCA_API_KEY_ID=your_key_here
-APCA_API_SECRET_KEY=your_secret_here
+APCA_API_KEY_ID=your_alpaca_key
+APCA_API_SECRET_KEY=your_alpaca_secret
+APCA_API_BASE_URL=https://paper-api.alpaca.markets
+
+TAVILY_API_KEY=your_tavily_key
+GOOGLE_API_KEY=your_google_key
+ANALYST_LLM_MODEL=gemini-2.0-flash
 ```
 
-### 3. Run Workflow
+### Run the Weekly Pipeline
 
 ```bash
-# Step 1: Get ETF universe
-python src/workflow/00-get-etf-universe.py
-
-# Step 2: Fetch weekly data
-python src/workflow/02-fetch-weekly-data.py
-
-# Step 3: Build features
-python src/workflow/03-build-weekly-features.py
-
-# Step 4: Run experiment
-python src/workflow/04-run-experiment.py experiments/exp001/config.json
+bash scripts/weekly_update.sh
 ```
 
-## Experiment Configuration
+### Run Just the Analyst
 
-Experiments are configured via JSON files in the `experiments/` directory. Example:
-
-```json
-{
-  "experiment_id": "exp001",
-  "symbols": ["SPY", "QQQ", "IWM"],
-  "time_unit": "week",
-  "historical_range": {
-    "start": "2021-01-01",
-    "end": "2024-12-31"
-  },
-  "strategy": {
-    "name": "momentum",
-    "hyperparameters": {
-      "lookback_weeks": [2, 4, 8],
-      "momentum_threshold": [0.02, 0.05, 0.10],
-      "volume_threshold": [1.2, 1.5, 2.0],
-      "max_positions": [3, 5, 10]
-    }
-  },
-  "initial_capital": 100000.0,
-  "walk_forward": {
-    "enabled": false,
-    "train_weeks": 52,
-    "operate_weeks": 1
-  }
-}
+```bash
+python -m src.analyst.run path/to/candidates.csv --output-dir output/
 ```
 
-## Strategies
+### View MLflow Results
 
-### Momentum Strategy
+```bash
+mlflow ui --port 5000
+# Open http://127.0.0.1:5000
+```
 
-The momentum strategy enters positions based on:
-- Positive price momentum (N-week return > threshold)
-- Volume above average
-- Price above moving average
+---
 
-Exits based on:
-- Momentum reversal
-- Stop-loss
-- Profit target
+## Technologies
 
-## Outputs
-
-Each experiment generates:
-- Portfolio equity curve
-- Performance metrics (Sharpe ratio, max drawdown, win rate)
-- Trade-by-trade results
-- Weekly recommendations
-
-Results are saved in `experiments/{experiment_id}/results.json`
-
-## Development
-
-This project follows a modular design:
-- **Data Sources**: Factory pattern for multiple data providers (Alpaca, etc.)
-- **Strategies**: Abstract base class for easy strategy implementation
-- **Backtesting**: Portfolio-level backtesting with weekly rebalancing
-- **Experiments**: Config-driven experiment framework with hyperparameter search
+| Layer | Technologies |
+|-------|-------------|
+| **Data** | Alpaca Markets API, pandas, NumPy |
+| **Strategy** | Custom mean-reversion backtester, scipy |
+| **ML** | scikit-learn, XGBoost, PyTorch |
+| **Agentic AI** | LangGraph, LangChain, Tavily Search |
+| **LLMs** | Gemini 2.0 Flash, GPT-4o, Claude 3.5 Sonnet (multi-model routing) |
+| **Tracking** | MLflow (local + Databricks) |
+| **Visualization** | Plotly, custom HTML dashboards |
+| **Deployment** | Databricks notebooks, DBFS |
+| **Infrastructure** | Python 3.11, dotenv, shell pipeline |
 
 ## License
 
