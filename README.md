@@ -72,38 +72,56 @@ The agent has been ported to a self-contained Databricks notebook (`notebooks/an
 ```
 trading_etf/
 ├── scripts/
-│   └── weekly_update.sh          # One-command weekly pipeline
+│   └── weekly_update.sh            # One-command weekly pipeline
 ├── src/
-│   ├── analyst/                   # Agentic AI analyst
-│   │   ├── graph.py              #   LangGraph workflow (5 nodes)
-│   │   ├── run.py                #   CLI entry point + MLflow logging
-│   │   ├── instrumentation.py    #   Detailed metrics (tokens, cost, latency)
-│   │   ├── logging_config.py     #   Trace logging (full prompts/responses)
+│   ├── analyst/                     # Agentic AI analyst
+│   │   ├── graph.py                #   LangGraph workflow (5 nodes)
+│   │   ├── run.py                  #   CLI entry point + MLflow logging
+│   │   ├── instrumentation.py      #   Detailed metrics (tokens, cost, latency)
+│   │   ├── logging_config.py       #   Trace logging (full prompts/responses)
 │   │   └── tools/
-│   │       └── search.py         #   Tavily web search tool
-│   ├── data/                      # Data sources, ETL, feature engineering
-│   │   ├── alpaca_source.py      #   Alpaca Markets API integration
+│   │       └── search.py           #   Tavily web search tool
+│   ├── data/                        # Data sources, ETL, feature engineering
+│   │   ├── alpaca_source.py        #   Alpaca Markets API integration
 │   │   ├── weekly_feature_engineering.py
-│   │   └── ...
-│   ├── backtesting/               # Strategy backtesting engine
+│   │   ├── etf_filter.py
+│   │   ├── symbol_filter.py
+│   │   ├── metadata_manager.py
+│   │   └── data_source_factory.py
+│   ├── backtesting/                 # Strategy backtesting engine
 │   │   ├── mean_reversion_backtester.py
-│   │   └── portfolio_backtester.py
-│   ├── strategies/                # Trading strategies
-│   ├── training/                  # ML model training (sklearn, XGBoost, PyTorch)
-│   ├── visualization/             # Plotly-based visualizations
+│   │   ├── portfolio_backtester.py
+│   │   └── experiment_runner.py
+│   ├── strategies/                  # Trading strategies
+│   │   ├── base_strategy.py
+│   │   ├── momentum_strategy.py
+│   │   └── strategy_factory.py
+│   ├── training/                    # ML model training (sklearn, XGBoost, PyTorch)
+│   │   ├── cross_validator.py
+│   │   ├── feature_builder.py
+│   │   ├── evaluator.py
+│   │   └── models/                 #   Linear, tree, classification models
+│   ├── reports/                     # Generated weekly retrospectives
+│   ├── utils/                       # Date utilities, device detection
+│   ├── visualization/               # Plotly-based visualizations
 │   └── workflow/
-│       ├── pipeline/              # Production pipeline scripts (00–21b)
-│       └── research/              # Research & experimentation scripts (06–22)
+│       ├── pipeline/                # Production scripts (00–05, 21a–21b)
+│       └── research/               # Research scripts (06–22)
 ├── notebooks/
-│   ├── analyst_databricks.py     # Databricks notebook (self-contained)
+│   ├── analyst_databricks.py       # Databricks notebook (self-contained)
 │   ├── analyst_databricks_confirmed.py  # Validated on Databricks
-│   ├── test_local.py             # Local validation runner
-│   └── sample_candidates.csv     # Sample data for testing
-├── data/                          # Generated: market data (gitignored)
-├── experiments/                   # Generated: experiment results (gitignored)
-├── pre_production/                # Generated: weekly trade candidates (gitignored)
+│   ├── test_local.py               # Local validation runner
+│   └── sample_candidates.csv       # Sample data for testing
+├── docs/                            # Feature docs, weekly update guide
+├── experiments/exp001/              # Sample experiment config
+├── RESEARCH_LOG.md                  # Research journey narrative
+├── CODING_STANDARDS.md
+├── CONTEXT.md
+├── SETUP.md
 └── requirements.txt
 ```
+
+Note: The pipeline generates `data/`, `experiments/` results, `pre_production/` candidates, and `logs/` at runtime — these are gitignored and reproducible by rerunning the workflow.
 
 ## Research Journey
 
