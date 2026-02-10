@@ -84,9 +84,11 @@ trading_etf/
 │   │       └── search.py           #   Tavily web search tool
 │   ├── data/                        # Data sources, ETL, feature engineering
 │   │   ├── alpaca_source.py        #   Alpaca Markets API integration
+│   │   ├── market_data_source.py
 │   │   ├── weekly_feature_engineering.py
 │   │   ├── etf_filter.py
 │   │   ├── symbol_filter.py
+│   │   ├── symbol_list_manager.py
 │   │   ├── metadata_manager.py
 │   │   └── data_source_factory.py
 │   ├── backtesting/                 # Strategy backtesting engine
@@ -97,15 +99,23 @@ trading_etf/
 │   │   ├── base_strategy.py
 │   │   ├── momentum_strategy.py
 │   │   └── strategy_factory.py
+│   ├── models/                      # ML model registry
 │   ├── training/                    # ML model training (sklearn, XGBoost, PyTorch)
 │   │   ├── cross_validator.py
+│   │   ├── data_loader.py
 │   │   ├── feature_builder.py
 │   │   ├── evaluator.py
+│   │   ├── model_factory.py
+│   │   ├── normalizer.py
+│   │   ├── prediction_analyzer.py
+│   │   ├── visualizer.py
 │   │   └── models/                 #   Linear, tree, classification models
 │   ├── reports/                     # Generated weekly retrospectives
 │   ├── utils/                       # Date utilities, device detection
 │   ├── visualization/               # Plotly-based visualizations
 │   └── workflow/
+│       ├── config.py                # Shared configuration
+│       ├── workflow_utils.py        # Shared utilities
 │       ├── pipeline/                # Production scripts (00–05, 21a–21b)
 │       └── research/               # Research scripts (06–22)
 ├── notebooks/
@@ -115,11 +125,13 @@ trading_etf/
 │   └── sample_candidates.csv       # Sample data for testing
 ├── docs/                            # Feature docs, weekly update guide
 ├── experiments/exp001/              # Sample experiment config
+├── pyproject.toml                   # Package configuration
+├── setup.py
+├── requirements.txt
 ├── RESEARCH_LOG.md                  # Research journey narrative
 ├── CODING_STANDARDS.md
 ├── CONTEXT.md
-├── SETUP.md
-└── requirements.txt
+└── SETUP.md
 ```
 
 Note: The pipeline generates `data/`, `experiments/` results, `pre_production/` candidates, and `logs/` at runtime — these are gitignored and reproducible by rerunning the workflow.
@@ -177,8 +189,10 @@ bash scripts/weekly_update.sh
 ### Run Just the Analyst
 
 ```bash
-python -m src.analyst.run path/to/candidates.csv --output-dir output/
+python -m src.analyst.run path/to/candidates.csv
 ```
+
+Output (JSON report, HTML report, graph visualization) is saved alongside the input CSV.
 
 ### View MLflow Results
 
