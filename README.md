@@ -1,17 +1,52 @@
-# ETF Weekly Trading System with Agentic AI Analyst
-## MVP R&D Workbench Purposes Only
+# ETF Weekly Trading System with Multi-Agent AI Analyst
 
-A research-to-production platform for developing, backtesting, and operating a weekly ETF trading strategy — augmented by an **agentic AI analyst** built with LangGraph that provides qualitative news-driven assessments of trade candidates.
+## MVP R&D Workbench — For Research and Educational Purposes Only
+
+> **Disclaimer:** This software is provided for research and educational purposes only.
+> It is not financial advice and should not be used for live trading without independent
+> verification. Past backtest performance does not guarantee future results. The authors
+> assume no liability for any financial losses incurred through the use of this system.
+
+---
+
+### A Note on Independent Discovery
+
+We embarked on this project to combine the best of quantitative and qualitative
+approaches to ETF trading — building a multi-agent architecture where specialized
+analysts (Quant, News, Synthesis, Review) collaborate to assess trade candidates.
+During a literature review conducted in February 2026, we discovered that researchers
+at Stony Brook University, Carnegie Mellon, UBC, Yale, and Fudan University had
+independently arrived at a strikingly similar architecture:
+
+> **QuantAgent: Price-Driven Multi-Agent LLMs for High-Frequency Trading**
+> Fei Xiong, Xiang Zhang, Aosong Feng, Siqi Sun, Chenyu You
+> arXiv:2509.09995v3 [cs.CE], September 2025
+> [Paper](https://arxiv.org/abs/2509.09995) |
+> [GitHub](https://github.com/Y-Research-SBU/QuantAgent) |
+> [Website](https://Y-Research-SBU.github.io/QuantAgent/)
+
+QuantAgent decomposes trading into four specialized agents — Indicator, Pattern,
+Trend, and Risk — each with domain-specific tools and structured reasoning. While
+their focus is high-frequency trading and ours is weekly mean-reversion, the core
+insight is the same: **decomposing financial analysis into specialist agents with
+distinct tools produces more grounded, traceable, and consistent results than
+monolithic LLM approaches.**
+
+We take encouragement from this convergence. It suggests the architectural pattern
+is sound, and we applaud the thoroughness of their study — particularly their
+rigorous evaluation across nine instruments and multiple time horizons.
+
+---
 
 ## What This Project Does
 
 Each week, the system:
 
 1. **Fetches** daily market data for ~2,200 ETFs (Alpaca API)
-2. **Engineers** features — returns, volatility, momentum, cyclical encodings
+2. **Engineers** features — returns, volatility, momentum, Bollinger Bands, cyclical encodings
 3. **Backtests** a mean-reversion strategy to validate parameters
 4. **Generates** ranked trade candidates with entry/exit prices and position sizes
-5. **Runs an AI analyst** that searches financial news, assesses each candidate, and produces a qualitative overlay (GREEN / YELLOW / RED flags)
+5. **Runs an AI analyst** that searches financial news, computes quantitative profiles, and produces qualitative assessments (GREEN / YELLOW / RED flags)
 6. **Produces** an interactive HTML dashboard combining quantitative and qualitative signals
 
 The entire pipeline runs via a single script (`scripts/weekly_update.sh`) and completes in ~10 minutes.
@@ -19,6 +54,8 @@ The entire pipeline runs via a single script (`scripts/weekly_update.sh`) and co
 ---
 
 ## Architecture
+
+### Current (v0.1) — Single-Agent Sequential
 
 ```mermaid
 flowchart TD
@@ -29,15 +66,44 @@ flowchart TD
     end
 
     subgraph agent ["Agentic AI Analyst"]
-        E["load"] --> F["fetch_news<br>(Tavily Search)"]
-        F --> G["analyze_themes<br>(LLM)"]
-        G --> H["analyze_symbols<br>(LLM × N)"]
+        E["load"] --> F["fetch_news<br>(Market Overview +<br>Tavily Search)"]
+        F --> G["analyze_themes<br>(LLM — 7-dimension<br>checklist)"]
+        G --> H["analyze_symbols<br>(LLM x N)"]
         H --> I["review_and_refine<br>(LLM — Reflection)"]
     end
 
     D --> E
     I --> J["Interactive Dashboard<br>+ MLflow Tracking"]
 ```
+
+### Planned (v0.2) — Multi-Agent Specialist Architecture
+
+```mermaid
+flowchart TD
+    subgraph prep ["Phase 1: Preparation"]
+        A["Pipeline Runner<br>Feature matrix, alpha residuals,<br>sector grouping"]
+    end
+
+    subgraph specialists ["Phase 2: Specialist Analysis"]
+        B["Quant Analyst<br>(alpha/beta, technicals,<br>sector profiles)"]
+        C["News Analyst<br>(per-sector search,<br>structured extraction)"]
+    end
+
+    subgraph synthesis ["Phase 3–4: Synthesis + Review"]
+        D["Senior Analyst<br>(merge quant + news,<br>per-symbol assessments)"]
+        E["Managing Director<br>(final review,<br>executive summary,<br>portfolio view)"]
+    end
+
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F["Dashboard + Report"]
+```
+
+See [`docs/V0.2_MULTI_AGENT_DESIGN.md`](docs/V0.2_MULTI_AGENT_DESIGN.md) for the full design.
+
+---
 
 ## Agentic AI — The Interesting Part
 
@@ -46,16 +112,18 @@ The analyst (`src/analyst/`) implements a **LangGraph workflow** with the **Refl
 | Node | What It Does | Tool / Model |
 |------|-------------|-------------|
 | `load` | Initialize state | — |
-| `fetch_news` | Search financial news per symbol | Tavily API |
-| `analyze_themes` | Identify macro themes across candidates | LLM (Gemini / GPT) |
-| `analyze_symbols` | Per-symbol qualitative assessment | LLM × N candidates |
-| `review_and_refine` | **Reflection** — senior analyst reviews junior's work, adjusts flags | LLM (optionally different model) |
+| `fetch_news` | Market overview + per-symbol news search | Tavily API |
+| `analyze_themes` | Identify macro themes using 7-dimension analytical framework | LLM (GPT-4o) |
+| `analyze_symbols` | Per-symbol assessment with evidence quality guard | LLM (GPT-4o-mini) |
+| `review_and_refine` | **Reflection** — senior analyst reviews, adjusts flags, spots blind spots | LLM (GPT-4o) |
 
 **Key design choices:**
 
-- **Reflection Pattern**: The reviewer node critiques the initial analysis, catches inconsistencies, and adjusts conviction flags — mimicking a senior/junior analyst dynamic
-- **Multi-Model Routing**: Different LLMs for analysis vs. review (e.g., Gemini Flash for bulk, GPT-4o for critical review). Configurable via environment variables
-- **Qualitative-Only Scope**: The agent assesses *news*, not quant metrics. It answers: "Is this drop transient or structural?" The quant system handles everything else
+- **Structured Analysis Framework**: Every analysis evaluates 7 dimensions — Technical, Rates/Yield Curve, Credit/Fundamentals, Regulatory/Legal, Macro/Geopolitical, Sector Rotation, and Market-Wide Events
+- **Evidence Quality Guard**: Each assessment includes an `evidence_quality` rating (`strong/moderate/weak/none`). When evidence is absent, the system says so rather than fabricating a narrative
+- **Market Context Injection**: Broad market overview articles are fetched first and injected into every per-symbol prompt, ensuring macro context is never missed
+- **Multi-Model Routing**: Different LLMs for analysis vs. review (e.g., GPT-4o-mini for bulk, GPT-4o for synthesis and critical review). Configurable via environment variables
+- **Reflection Pattern**: The reviewer node critiques the initial analysis, catches inconsistencies, and adjusts conviction flags
 - **MLflow Integration**: Every run logs parameters, token usage, costs, flag distributions, and artifacts
 
 ### Databricks Deployment
@@ -65,6 +133,34 @@ The agent has been ported to a self-contained Databricks notebook (`notebooks/an
 - Native MLflow experiment tracking
 - `displayHTML()` for interactive reports
 - Zero dependencies on the local `src/` package structure
+
+---
+
+## Research Journey
+
+This project evolved through several phases:
+
+1. **Momentum strategies** — classic trend-following with grid search over lookback windows, volume thresholds, and position sizing
+2. **ML classification** — scikit-learn, XGBoost, and PyTorch models predicting weekly direction. Explored rolling cross-validation, regime detection, and feature importance
+3. **Mean-reversion** — the current strategy. Buy ETFs that dropped significantly (bottom 5%, >2% weekly loss), targeting a 1–3 week bounce. Backtested across ~2,200 symbols with parameter optimization
+4. **Agentic AI overlay (v0.1)** — Single-agent LangGraph analyst with news search, thematic analysis, per-symbol assessment, and reflection review
+5. **Multi-agent design (v0.2)** — Specialist agents (Quant, News, Synthesis, Review) with alpha/beta decomposition, sector-aware analysis, and epistemic honesty protocols
+6. **Literature review** — Discovered convergence with QuantAgent and broader academic work on LLMs in finance. See [`docs/LITERATURE_SEARCH_PROMPT.md`](docs/LITERATURE_SEARCH_PROMPT.md)
+
+The `src/workflow/research/` directory contains 25+ experiment scripts documenting this evolution.
+The `docs/` directory contains lessons learned and design documents.
+
+---
+
+## Key Learnings (v0.1)
+
+See [`docs/V0.1_LESSONS_LEARNED.md`](docs/V0.1_LESSONS_LEARNED.md) for the full write-up. Headlines:
+
+1. **LLMs are better at synthesis than discovery** — they organize information you give them, but are poor at finding it and terrible at admitting when they can't
+2. **Quantitative grounding is essential** — without alpha/beta decomposition, the LLM invents ETF-specific narratives for market-wide movements
+3. **Sector is the right unit of analysis** for news, not individual ETFs
+4. **Evidence quality matters more than analysis quality** — "no specific evidence found" is more useful than a fluent but ungrounded narrative
+5. **The LLM's highest-value role is risk avoidance** — filtering out "falling knives" (structural declines), not finding better trades
 
 ---
 
@@ -81,7 +177,7 @@ trading_etf/
 │   │   ├── instrumentation.py      #   Detailed metrics (tokens, cost, latency)
 │   │   ├── logging_config.py       #   Trace logging (full prompts/responses)
 │   │   └── tools/
-│   │       └── search.py           #   Tavily web search tool
+│   │       └── search.py           #   Tavily web search + market overview
 │   ├── data/                        # Data sources, ETL, feature engineering
 │   │   ├── alpaca_source.py        #   Alpaca Markets API integration
 │   │   ├── market_data_source.py
@@ -123,8 +219,12 @@ trading_etf/
 │   ├── analyst_databricks_confirmed.py  # Validated on Databricks
 │   ├── test_local.py               # Local validation runner
 │   └── sample_candidates.csv       # Sample data for testing
-├── docs/                            # Feature docs, weekly update guide
-├── experiments/exp001/              # Sample experiment config
+├── docs/
+│   ├── V0.1_LESSONS_LEARNED.md     # What worked, what didn't
+│   ├── V0.2_MULTI_AGENT_DESIGN.md  # Clean-sheet multi-agent architecture
+│   ├── LITERATURE_SEARCH_PROMPT.md # Prompt for academic/industry survey
+│   ├── FEATURES.md                 # Feature documentation
+│   └── WEEKLY_UPDATE.md            # Weekly pipeline guide
 ├── pyproject.toml                   # Package configuration
 ├── setup.py
 ├── requirements.txt
@@ -133,19 +233,7 @@ trading_etf/
 └── SETUP.md
 ```
 
-Note: The pipeline generates `data/`, `experiments/` results, `pre_production/` candidates, and `logs/` at runtime — these are gitignored and reproducible by rerunning the workflow.
-
-## Research Journey
-
-This project evolved through several phases:
-
-1. **Momentum strategies** — classic trend-following with grid search over lookback windows, volume thresholds, and position sizing
-2. **ML classification** — scikit-learn, XGBoost, and PyTorch models predicting weekly direction. Explored rolling cross-validation, regime detection, and feature importance
-3. **Mean-reversion** — the current strategy. Buy ETFs that dropped significantly (>2σ), targeting a 1–3 week bounce. Backtested across ~2,200 symbols with parameter optimization
-4. **Agentic AI overlay** — LangGraph-based analyst that adds qualitative news assessment on top of the quantitative signal
-5. **Databricks deployment** — ported the agent to Databricks with MLflow tracking
-
-The `src/workflow/research/` directory contains 25+ experiment scripts documenting this evolution.
+Note: The pipeline generates `data/`, `experiments/`, `pre_production/`, and `logs/` at runtime — these are gitignored and reproducible by rerunning the workflow.
 
 ---
 
@@ -210,11 +298,20 @@ mlflow ui --port 5000
 | **Strategy** | Custom mean-reversion backtester, scipy |
 | **ML** | scikit-learn, XGBoost, PyTorch |
 | **Agentic AI** | LangGraph, LangChain, Tavily Search |
-| **LLMs** | Gemini 2.0 Flash, GPT-4o, Claude 3.5 Sonnet (multi-model routing) |
+| **LLMs** | Gemini 2.0 Flash, GPT-4o, GPT-4o-mini, Claude 3.5 Sonnet (multi-model routing) |
 | **Tracking** | MLflow (local + Databricks) |
 | **Visualization** | Plotly, custom HTML dashboards |
 | **Deployment** | Databricks notebooks, DBFS |
 | **Infrastructure** | Python 3.11, dotenv, shell pipeline |
+
+---
+
+## Related Work
+
+- [QuantAgent](https://arxiv.org/abs/2509.09995) — Multi-agent LLM framework for HFT (Xiong et al., 2025)
+- [FinGPT](https://arxiv.org/abs/2306.06031) — Open-source financial LLMs (Yang et al., 2023)
+- [BloombergGPT](https://arxiv.org/abs/2303.17564) — Domain-specific financial LLM (Wu et al., 2023)
+- [FinBERT](https://arxiv.org/abs/1908.10063) — Financial sentiment analysis baseline (Araci, 2019)
 
 ## License
 

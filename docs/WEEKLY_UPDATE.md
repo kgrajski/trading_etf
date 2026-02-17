@@ -29,7 +29,7 @@ Friday evening may be too early for complete Friday data, especially the officia
 ### Quick Run
 
 ```bash
-cd /Users/kag/Development/Projects/trading_etf
+cd /path/to/trading_etf
 source .venv/bin/activate
 ./scripts/weekly_update.sh
 ```
@@ -37,7 +37,7 @@ source .venv/bin/activate
 ### With Logging
 
 ```bash
-cd /Users/kag/Development/Projects/trading_etf
+cd /path/to/trading_etf
 source .venv/bin/activate
 mkdir -p logs
 ./scripts/weekly_update.sh 2>&1 | tee logs/update_$(date +%Y%m%d).log
@@ -48,7 +48,7 @@ mkdir -p logs
 If you prefer to run each step individually:
 
 ```bash
-cd /Users/kag/Development/Projects/trading_etf
+cd /path/to/trading_etf
 source .venv/bin/activate
 
 # Step 1: Fetch new data (incremental mode)
@@ -75,12 +75,12 @@ python src/workflow/05-build-feature-matrix.py
 
 2. Add the following line (runs Saturday 8:00 AM):
    ```
-   0 8 * * 6 /Users/kag/Development/Projects/trading_etf/scripts/weekly_update.sh >> /Users/kag/Development/Projects/trading_etf/logs/cron.log 2>&1
+   0 8 * * 6 /path/to/trading_etf/scripts/weekly_update.sh >> /path/to/trading_etf/logs/cron.log 2>&1
    ```
 
 3. Create logs directory:
    ```bash
-   mkdir -p /Users/kag/Development/Projects/trading_etf/logs
+   mkdir -p /path/to/trading_etf/logs
    ```
 
 ### Cron Expression Explained

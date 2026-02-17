@@ -5,7 +5,7 @@ Local test runner for analyst_databricks.py logic.
 Validates the notebook's core code works before uploading to Databricks.
 Run from the project root:
 
-    cd /Users/kag/Development/Projects/trading_etf
+    cd /path/to/trading_etf
     python notebooks/test_local.py
 """
 import json

@@ -5,7 +5,7 @@
 ### 1. Create Virtual Environment
 
 ```bash
-cd /Users/kag/Development/Projects/trading_etf
+cd trading_etf
 python -m venv .venv
 source .venv/bin/activate  # On macOS/Linux
 # OR
