@@ -64,20 +64,20 @@ EXPERIMENT_NAME = "exp019_3_trades"
 INITIAL_CAPITAL = 10_000.0
 MAX_ACTIVE_TRADES = 10
 
-# Entry parameters (CHAMPION)
+# Entry parameters
 BOTTOM_PERCENTILE = 0.05  # Bottom 5% losers
-MIN_LOSS_PCNT = 6.0       # Champion: 6% (higher threshold)
+MIN_LOSS_PCNT = 2.0       # Aligned with production (21b)
 
-# Exit parameters (CHAMPION)
-STOP_LOSS_PCNT = 4.0      # Champion: 4% (tighter stop)
-PROFIT_EXIT_PCNT = 10.0   # Champion: 10%
-MAX_HOLD_WEEKS = 3        # Champion: 3 weeks
+# Exit parameters
+STOP_LOSS_PCNT = 16.0     # Aligned with production (21b)
+PROFIT_EXIT_PCNT = 10.0   # 10%
+MAX_HOLD_WEEKS = 1        # Aligned with production (21b)
 
-# Regime parameters (CHAMPION - bull boost)
+# Regime parameters
 USE_REGIME = True
 REGIME_SYMBOL = "SPY"
 REGIME_MA_PERIOD = 50
-BOOST_DIRECTION = "bull"  # Champion: bull (larger positions in bull markets)
+BOOST_DIRECTION = "bear"  # Aligned with production (21b): bear market boost
 BOOST_MULTIPLIER = 1.10   # 10% larger positions when condition met
 
 # Chart parameters
@@ -379,19 +379,19 @@ def create_chart(
     fig.add_annotation(
         x=1.02, xref="paper", y=trade["limit_price"], yref="y",
         text=f"Limit ${trade['limit_price']:.2f}", showarrow=False,
-        font=dict(size=10, color="#FFD700"), bgcolor="rgba(255,255,255,0.8)",
+        font=dict(size=13, color="#FFD700"), bgcolor="rgba(255,255,255,0.8)",
         xanchor="left",
     )
     fig.add_annotation(
         x=1.02, xref="paper", y=trade["stop_price"], yref="y",
         text=f"Stop ${trade['stop_price']:.2f}", showarrow=False,
-        font=dict(size=10, color="#DC3545"), bgcolor="rgba(255,255,255,0.8)",
+        font=dict(size=13, color="#DC3545"), bgcolor="rgba(255,255,255,0.8)",
         xanchor="left",
     )
     fig.add_annotation(
         x=1.02, xref="paper", y=trade["target_price"], yref="y",
         text=f"Target ${trade['target_price']:.2f}", showarrow=False,
-        font=dict(size=10, color="#28A745"), bgcolor="rgba(255,255,255,0.8)",
+        font=dict(size=13, color="#28A745"), bgcolor="rgba(255,255,255,0.8)",
         xanchor="left",
     )
     
@@ -403,16 +403,21 @@ def create_chart(
     )
     
     fig.update_layout(
-        title=f"<b>{symbol}</b> - {name[:50]}<br>"
-              f"<sub>Shares: {trade['shares']} | Limit: ${trade['limit_price']:.2f} | "
-              f"Stop: ${trade['stop_price']:.2f} (-{STOP_LOSS_PCNT}%) | Target: ${trade['target_price']:.2f} (+{PROFIT_EXIT_PCNT}%)</sub>",
-        height=700,
-        margin=dict(r=100),  # Right margin for price labels
+        title=dict(
+            text=f"<b>{symbol}</b> - {name[:50]}<br>"
+                 f"<sub>Shares: {trade['shares']} | Limit: ${trade['limit_price']:.2f} | "
+                 f"Stop: ${trade['stop_price']:.2f} (-{STOP_LOSS_PCNT}%) | Target: ${trade['target_price']:.2f} (+{PROFIT_EXIT_PCNT}%)</sub>",
+            font=dict(size=16),
+        ),
+        height=620,
+        margin=dict(r=120, t=60),
         xaxis_rangeslider_visible=False,
         showlegend=False,
         hovermode="x unified",
+        hoverlabel=dict(font_size=13),
     )
-    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], tickfont=dict(size=12))
+    fig.update_yaxes(tickfont=dict(size=12))
     
     out_path = output_dir / f"{symbol}.html"
     fig.write_html(str(out_path))
@@ -454,7 +459,7 @@ def create_inspector(
     for _, t in candidates.iterrows():
         symbol = t["symbol"]
         color = "negative" if t["pct_return"] < 0 else "positive"
-        badge = t.get("risk_badge", "")
+        badge = str(t.get("risk_badge", "")) if pd.notna(t.get("risk_badge")) else ""
         
         # Add AI flag badge if available
         ai_data = symbol_analyses.get(symbol, {})
@@ -530,29 +535,29 @@ def create_inspector(
     <title>Research Trade Candidates - {week_str}</title>
     <style>
         * {{ box-sizing: border-box; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 8px 12px; background: #f5f5f5; font-size: 12px; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 10px 16px; background: #f5f5f5; font-size: 14px; }}
         
-        /* Compact Header */
-        .header-row {{ display: flex; align-items: center; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }}
-        h1 {{ margin: 0; font-size: 18px; }}
-        .badge {{ display: inline-block; background: #2E86AB; color: white; padding: 1px 6px; border-radius: 3px; font-size: 10px; }}
-        .meta {{ color: #666; font-size: 11px; }}
-        .config-pill {{ background: #d4edda; border: 1px solid #28A745; padding: 2px 8px; border-radius: 3px; font-size: 10px; white-space: nowrap; }}
-        .sizing-pill {{ background: #e8f4f8; padding: 2px 8px; border-radius: 3px; font-size: 10px; white-space: nowrap; }}
-        .risk-pill {{ background: #fff3cd; border: 1px solid #ffc107; padding: 2px 8px; border-radius: 3px; font-size: 10px; cursor: help; }}
+        /* Header */
+        .header-row {{ display: flex; align-items: center; gap: 14px; margin-bottom: 8px; flex-wrap: wrap; }}
+        h1 {{ margin: 0; font-size: 22px; }}
+        .badge {{ display: inline-block; background: #2E86AB; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; }}
+        .meta {{ color: #666; font-size: 13px; }}
+        .config-pill {{ background: #d4edda; border: 1px solid #28A745; padding: 3px 10px; border-radius: 4px; font-size: 12px; white-space: nowrap; }}
+        .sizing-pill {{ background: #e8f4f8; padding: 3px 10px; border-radius: 4px; font-size: 12px; white-space: nowrap; }}
+        .risk-pill {{ background: #fff3cd; border: 1px solid #ffc107; padding: 3px 10px; border-radius: 4px; font-size: 12px; cursor: help; }}
         
-        /* AI Section - Compact */
-        .ai-pill {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 2px 8px; border-radius: 3px; display: inline-flex; align-items: center; gap: 6px; }}
-        .ai-btn {{ background: white; color: #667eea; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-weight: bold; font-size: 10px; }}
+        /* AI Section */
+        .ai-pill {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 3px 10px; border-radius: 4px; display: inline-flex; align-items: center; gap: 8px; }}
+        .ai-btn {{ background: white; color: #667eea; border: none; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px; }}
         .ai-btn:hover {{ background: #f0f0f0; }}
-        .ai-sentiment {{ padding: 1px 6px; border-radius: 8px; font-size: 9px; font-weight: bold; }}
+        .ai-sentiment {{ padding: 2px 8px; border-radius: 8px; font-size: 11px; font-weight: bold; }}
         .ai-sentiment.favorable {{ background: #28A745; }}
         .ai-sentiment.neutral {{ background: #FFC107; color: #333; }}
         .ai-sentiment.unfavorable {{ background: #DC3545; }}
         .ai-sentiment.unknown {{ background: #6c757d; }}
         
         /* AI Badge Styles */
-        .ai-badge {{ display: inline-block; padding: 0px 4px; border-radius: 3px; font-size: 9px; font-weight: bold; margin-left: 3px; background: #6c757d; color: white; }}
+        .ai-badge {{ display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: bold; margin-left: 4px; background: #6c757d; color: white; }}
         .ai-badge.high {{ background: #28A745; }}
         .ai-badge.low {{ background: #DC3545; }}
         .ai-badge.top {{ background: #FFD700; color: #333; }}
@@ -561,54 +566,56 @@ def create_inspector(
         /* Modal Styles */
         .modal {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }}
         .modal.active {{ display: flex; }}
-        .modal-content {{ background: white; border-radius: 8px; max-width: 700px; max-height: 80vh; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }}
-        .modal-header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; }}
-        .modal-header h2 {{ margin: 0; font-size: 16px; }}
-        .modal-close {{ background: none; border: none; color: white; font-size: 20px; cursor: pointer; }}
-        .modal-body {{ padding: 16px; font-size: 13px; }}
-        .theme-card {{ background: #f8f9fa; padding: 10px; border-radius: 6px; margin-bottom: 8px; border-left: 3px solid #667eea; }}
-        .theme-card h4 {{ margin: 0 0 4px 0; color: #333; font-size: 13px; }}
-        .theme-symbols {{ font-size: 11px; color: #666; margin-bottom: 4px; }}
-        .theme-outlook {{ display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: bold; }}
+        .modal-content {{ background: white; border-radius: 8px; max-width: 780px; max-height: 80vh; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }}
+        .modal-header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; }}
+        .modal-header h2 {{ margin: 0; font-size: 19px; }}
+        .modal-close {{ background: none; border: none; color: white; font-size: 24px; cursor: pointer; }}
+        .modal-body {{ padding: 20px; font-size: 15px; line-height: 1.5; }}
+        .theme-card {{ background: #f8f9fa; padding: 14px; border-radius: 6px; margin-bottom: 10px; border-left: 4px solid #667eea; }}
+        .theme-card h4 {{ margin: 0 0 6px 0; color: #333; font-size: 15px; }}
+        .theme-symbols {{ font-size: 13px; color: #666; margin-bottom: 6px; }}
+        .theme-outlook {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }}
         .theme-outlook.favorable, .theme-outlook.transient {{ background: #d4edda; color: #155724; }}
         .theme-outlook.neutral, .theme-outlook.mixed, .theme-outlook.unclear {{ background: #fff3cd; color: #856404; }}
         .theme-outlook.unfavorable, .theme-outlook.structural {{ background: #f8d7da; color: #721c24; }}
-        .reviewer-notes {{ background: #e8f4f8; padding: 10px; border-radius: 6px; margin-top: 12px; font-style: italic; font-size: 12px; }}
+        .reviewer-notes {{ background: #e8f4f8; padding: 14px; border-radius: 6px; margin-top: 14px; font-style: italic; font-size: 14px; }}
         
         /* Symbol Overlay - Collapsible */
-        .symbol-overlay {{ display: none; background: rgba(255,255,255,0.98); border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); border-left: 3px solid #667eea; font-size: 11px; position: relative; }}
+        .symbol-overlay {{ display: none; background: rgba(255,255,255,0.98); border-radius: 6px; padding: 12px 14px; margin-bottom: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); border-left: 4px solid #667eea; font-size: 13px; position: relative; }}
         .symbol-overlay.active {{ display: block; }}
-        .symbol-overlay-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }}
-        .symbol-overlay h4 {{ margin: 0; color: #333; font-size: 12px; }}
-        .overlay-close {{ background: none; border: none; color: #999; font-size: 16px; cursor: pointer; padding: 0 4px; line-height: 1; }}
+        .symbol-overlay-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }}
+        .symbol-overlay h4 {{ margin: 0; color: #333; font-size: 15px; }}
+        .overlay-close {{ background: none; border: none; color: #999; font-size: 20px; cursor: pointer; padding: 0 6px; line-height: 1; }}
         .overlay-close:hover {{ color: #333; }}
-        .conviction-badge {{ padding: 2px 8px; border-radius: 3px; font-weight: bold; color: white; font-size: 10px; }}
+        .conviction-badge {{ padding: 3px 10px; border-radius: 4px; font-weight: bold; color: white; font-size: 12px; }}
         .conviction-badge.high {{ background: #28A745; }}
         .conviction-badge.medium {{ background: #FFC107; color: #333; }}
         .conviction-badge.low {{ background: #DC3545; }}
-        .symbol-narrative {{ line-height: 1.4; margin-bottom: 6px; }}
-        .symbol-pros-cons {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }}
-        .symbol-pros-cons ul {{ margin: 0; padding-left: 16px; }}
-        .key-risk {{ background: #fff3cd; padding: 4px 8px; border-radius: 3px; margin-top: 6px; }}
+        .symbol-narrative {{ line-height: 1.5; margin-bottom: 8px; }}
+        .symbol-pros-cons {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; }}
+        .symbol-pros-cons ul {{ margin: 0; padding-left: 18px; }}
+        .key-risk {{ background: #fff3cd; padding: 6px 10px; border-radius: 4px; margin-top: 8px; font-size: 13px; }}
         
         /* Main Layout */
-        .container {{ display: flex; gap: 12px; height: calc(100vh - 50px); }}
-        .sidebar {{ width: 480px; flex-shrink: 0; background: white; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; display: flex; flex-direction: column; }}
-        .sidebar-header {{ padding: 6px 10px; background: #2E86AB; color: white; font-weight: bold; font-size: 11px; display: flex; justify-content: space-between; align-items: center; }}
-        .ai-toggle {{ background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4); color: white; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 10px; }}
+        .container {{ display: flex; gap: 14px; height: calc(100vh - 60px); }}
+        .sidebar {{ width: 560px; flex-shrink: 0; background: white; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); overflow: hidden; display: flex; flex-direction: column; }}
+        .sidebar-header {{ padding: 8px 12px; background: #2E86AB; color: white; font-weight: bold; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }}
+        .ai-toggle {{ background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4); color: white; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }}
         .ai-toggle:hover {{ background: rgba(255,255,255,0.3); }}
         .ai-toggle.active {{ background: #667eea; border-color: #667eea; }}
         .table-container {{ overflow-y: auto; flex: 1; }}
         table {{ width: 100%; border-collapse: collapse; }}
-        th {{ background: #f0f0f0; padding: 4px 5px; text-align: left; font-size: 10px; position: sticky; top: 0; }}
-        td {{ padding: 4px 5px; border-bottom: 1px solid #eee; font-size: 11px; }}
+        th {{ background: #f0f0f0; padding: 8px 8px; text-align: left; font-size: 13px; font-weight: 600; position: sticky; top: 0; z-index: 1; border-bottom: 2px solid #ddd; }}
+        td {{ padding: 8px 8px; border-bottom: 1px solid #eee; font-size: 14px; }}
         tr.clickable {{ cursor: pointer; }}
         tr.clickable:hover {{ background: #e8f4f8; }}
+        tr.clickable:nth-child(even) {{ background: #fafafa; }}
+        tr.clickable:nth-child(even):hover {{ background: #e8f4f8; }}
         tr.active {{ background: #d0e8f0 !important; }}
-        .negative {{ color: #DC3545; }}
-        .positive {{ color: #28A745; }}
+        .negative {{ color: #DC3545; font-weight: 500; }}
+        .positive {{ color: #28A745; font-weight: 500; }}
         .chart-area {{ flex: 1; display: flex; flex-direction: column; min-width: 0; }}
-        .chart-container {{ flex: 1; background: white; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; }}
+        .chart-container {{ flex: 1; background: white; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); overflow: hidden; }}
         iframe {{ width: 100%; height: 100%; border: none; }}
     </style>
 </head>
@@ -619,7 +626,7 @@ def create_inspector(
         <span class="config-pill" title="Champion Config from 19.1b">SL={STOP_LOSS_PCNT}% TP={PROFIT_EXIT_PCNT}% Hold={MAX_HOLD_WEEKS}w</span>
         <span class="sizing-pill">${INITIAL_CAPITAL/MAX_ACTIVE_TRADES * (BOOST_MULTIPLIER if boost_active else 1):,.0f}/trade</span>
         <span class="risk-pill" title="{risk_tooltip}">⚠️ {len(risk_notes)} risks (hover)</span>
-        {f'<span class="ai-pill"><button class="ai-btn" onclick="showAIModal()">🤖 Themes</button><span class="ai-sentiment {thematic.get("overall_sentiment", "unknown").lower()}">{thematic.get("overall_sentiment", "unknown").upper()}</span></span>' if has_ai else ''}
+        {f'<span class="ai-pill"><button class="ai-btn" onclick="showAIModal()">🤖 Themes</button><span class="ai-sentiment {thematic.get("overall_news_assessment", thematic.get("overall_sentiment", "unknown")).lower()}">{thematic.get("overall_news_assessment", thematic.get("overall_sentiment", "unknown")).upper()}</span></span>' if has_ai else ''}
     </div>
     
     <div class="container">

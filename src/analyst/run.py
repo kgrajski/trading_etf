@@ -112,7 +112,7 @@ def _generate_review_section(review: dict) -> str:
         return ""
     
     assessment = review.get("overall_assessment", "N/A")
-    confidence = review.get("confidence_in_analysis", 0)
+    confidence = review.get("quality_score", review.get("confidence_in_analysis", 0))
     
     # Badge color based on assessment
     badge_class = {
@@ -121,33 +121,36 @@ def _generate_review_section(review: dict) -> str:
         "REJECT": "reject",
     }.get(assessment, "")
     
-    # Build lists
-    top_picks = review.get("top_picks", [])
-    avoid_list = review.get("avoid_list", [])
-    red_flags = review.get("red_flags", [])
+    # Build lists (support both old and new field names)
+    top_picks = review.get("strongest_candidates", review.get("top_picks", []))
+    avoid_list = review.get("weakest_candidates", review.get("avoid_list", []))
+    red_flags = review.get("missed_signals", review.get("red_flags", []))
     
     top_picks_html = "<ul>" + "".join([f"<li>⭐ {s}</li>" for s in top_picks]) + "</ul>" if top_picks else "<p>None specified</p>"
     avoid_html = "<ul>" + "".join([f"<li>⛔ {s}</li>" for s in avoid_list]) + "</ul>" if avoid_list else "<p>None specified</p>"
     red_flags_html = "<ul>" + "".join([f"<li>🚨 {f}</li>" for f in red_flags]) + "</ul>" if red_flags else "<p>None identified</p>"
     
+    # Map internal labels to reader-friendly labels
+    confidence_label = "High" if confidence >= 7 else "Moderate" if confidence >= 4 else "Low"
+    confidence_color = "#28A745" if confidence >= 7 else "#FFC107" if confidence >= 4 else "#DC3545"
+    
     return f'''
     <div class="review-section">
-        <h2>🔍 Senior Analyst Review (Reflection)</h2>
+        <h2>🔍 Senior Analyst Review</h2>
         <div class="review-header">
-            <span class="review-badge {badge_class}">{assessment}</span>
-            <span>Confidence: {confidence}/10</span>
+            <span class="review-badge" style="background: {confidence_color}; color: {'#333' if confidence >= 4 and confidence < 7 else 'white'}">Quality: {confidence}/10 ({confidence_label})</span>
         </div>
         <div class="review-content">
             <div class="review-box">
-                <h4>Top Picks</h4>
+                <h4>Strongest Candidates</h4>
                 {top_picks_html}
             </div>
             <div class="review-box">
-                <h4>Avoid List</h4>
+                <h4>Weakest / Avoid</h4>
                 {avoid_html}
             </div>
             <div class="review-box">
-                <h4>Red Flags</h4>
+                <h4>Missed Signals</h4>
                 {red_flags_html}
             </div>
         </div>
@@ -190,47 +193,53 @@ def generate_html_report(results: dict, candidates: list, output_dir: Path) -> P
     theme_cards = ""
     for theme in thematic.get("themes", []):
         symbols_str = ", ".join(theme.get("symbols", []))
+        drop_type = theme.get("drop_type", theme.get("mean_reversion_outlook", "unclear"))
         outlook_color = {
+            "transient": "#28A745",
             "favorable": "#28A745",
-            "neutral": "#FFC107", 
-            "unfavorable": "#DC3545"
-        }.get(theme.get("mean_reversion_outlook", "neutral"), "#6c757d")
+            "structural": "#DC3545",
+            "unfavorable": "#DC3545",
+            "unclear": "#FFC107",
+            "mixed": "#FFC107",
+            "neutral": "#FFC107",
+        }.get(drop_type.lower(), "#6c757d")
         
         theme_cards += f"""
         <div class="theme-card">
             <h3>{theme.get('name', 'Unknown Theme')}</h3>
             <div class="symbols">{symbols_str}</div>
-            <p>{theme.get('narrative', '')}</p>
+            <p>{theme.get('news_driver', theme.get('narrative', ''))}</p>
+            <p style="font-size:0.9em;color:#444;">{theme.get('narrative', '')}</p>
             <span class="outlook" style="background: {outlook_color}">
-                {theme.get('mean_reversion_outlook', 'unknown').upper()}
+                {drop_type.upper()}
             </span>
         </div>
         """
     
     # Build symbol cards
     symbol_cards = ""
-    top_picks = review.get("top_picks", [])
-    avoid_list = review.get("avoid_list", [])
+    top_picks = review.get("strongest_candidates", review.get("top_picks", []))
+    avoid_list = review.get("weakest_candidates", review.get("avoid_list", []))
     
     for candidate in candidates:
         symbol = candidate.get("symbol", "")
         analysis = symbol_analyses.get(symbol, {})
         
-        conviction = analysis.get("conviction", 5)
-        recommendation = analysis.get("recommendation", "HOLD")
+        flag = analysis.get("flag", "YELLOW")
+        drop_assessment = analysis.get("drop_assessment", "unclear")
         
-        # Check if conviction was adjusted by reviewer
-        was_adjusted = analysis.get("conviction_adjusted_by_reviewer", False)
-        original_conviction = analysis.get("conviction_original", conviction)
+        # Check if flag was adjusted by reviewer
+        was_adjusted = analysis.get("flag_adjusted_by_reviewer", False)
+        original_flag = analysis.get("flag_original", flag)
         adjustment_reason = analysis.get("adjustment_reason", "")
         
-        rec_color = {
-            "BUY": "#28A745",
-            "HOLD": "#FFC107",
-            "AVOID": "#DC3545"
-        }.get(recommendation, "#6c757d")
+        flag_color = {
+            "GREEN": "#28A745",
+            "YELLOW": "#FFC107",
+            "RED": "#DC3545"
+        }.get(flag, "#6c757d")
         
-        conv_color = "#28A745" if conviction >= 7 else "#FFC107" if conviction >= 4 else "#DC3545"
+        drop_color = {"transient": "#28A745", "structural": "#DC3545"}.get(drop_assessment, "#FFC107")
         
         # Add badge if in top picks or avoid list
         badge = ""
@@ -242,38 +251,38 @@ def generate_html_report(results: dict, candidates: list, output_dir: Path) -> P
         # Show adjustment info
         adjustment_html = ""
         if was_adjusted:
-            direction = "↓" if conviction < original_conviction else "↑"
             adjustment_html = f'''
             <div class="adjustment">
-                <strong>Reviewer Adjusted:</strong> {original_conviction} → {conviction} {direction}
+                <strong>Reviewer Adjusted:</strong> {original_flag} → {flag}
                 <br><em>{adjustment_reason}</em>
             </div>
             '''
         
-        pros = "".join([f"<li>✅ {p}</li>" for p in analysis.get("pros", [])])
-        cons = "".join([f"<li>⚠️ {c}</li>" for c in analysis.get("cons", [])])
+        pros = "".join([f"<li>✅ {p}</li>" for p in analysis.get("bullish_signals", analysis.get("pros", []))])
+        cons = "".join([f"<li>⚠️ {c}</li>" for c in analysis.get("bearish_signals", analysis.get("cons", []))])
         
         citations = ""
         for cite in analysis.get("citations", []):
-            citations += f'<a href="{cite.get("url", "#")}" target="_blank">{cite.get("title", "Source")[:50]}...</a><br>'
+            citations += f'<a href="{cite.get("url", "#")}" target="_blank">{cite.get("title", "Source")[:60]}...</a><br>'
         
         symbol_cards += f"""
         <div class="symbol-card" id="card-{symbol}">
             <div class="symbol-header">
                 <h3>{symbol}</h3>
-                <span class="conviction" style="background: {conv_color}">{conviction}/10</span>
-                <span class="recommendation" style="background: {rec_color}">{recommendation}</span>
+                <span class="conviction" style="background: {flag_color}">{flag}</span>
+                <span class="recommendation" style="background: {drop_color}">{drop_assessment.upper()}</span>
                 {badge}
             </div>
             <div class="symbol-name">{candidate.get('etf_name', '')[:50]}</div>
             <div class="return">Weekly Return: {candidate.get('pct_return', 0):.1f}%</div>
             {adjustment_html}
-            <p class="narrative">{analysis.get('narrative', 'No analysis available')}</p>
+            <p class="narrative"><strong>News:</strong> {analysis.get('news_summary', analysis.get('narrative', 'No analysis available'))}</p>
+            <p class="narrative">{analysis.get('flag_reason', '')}</p>
             <div class="pros-cons">
-                <div class="pros"><strong>Pros:</strong><ul>{pros if pros else '<li>None identified</li>'}</ul></div>
-                <div class="cons"><strong>Cons:</strong><ul>{cons if cons else '<li>None identified</li>'}</ul></div>
+                <div class="pros"><strong>Bullish Signals:</strong><ul>{pros if pros else '<li>None identified</li>'}</ul></div>
+                <div class="cons"><strong>Bearish Signals:</strong><ul>{cons if cons else '<li>None identified</li>'}</ul></div>
             </div>
-            <div class="key-risk"><strong>Key Risk:</strong> {analysis.get('key_risk', 'Unknown')}</div>
+            <div class="key-risk"><strong>Key Concern:</strong> {analysis.get('key_concern', analysis.get('key_risk', 'None'))}</div>
             <div class="citations"><strong>Sources:</strong><br>{citations if citations else 'No sources'}</div>
         </div>
         """
@@ -417,7 +426,7 @@ def generate_html_report(results: dict, candidates: list, output_dir: Path) -> P
     <div class="summary">
         <h2>Market Summary</h2>
         <p>{thematic.get('summary', 'No summary available')}</p>
-        <strong>Overall Sentiment:</strong> {thematic.get('overall_sentiment', 'unknown').upper()}
+        <strong>Overall News Assessment:</strong> {thematic.get('overall_news_assessment', thematic.get('overall_sentiment', 'unknown')).upper()}
     </div>
     
     <h2>Thematic Analysis</h2>
@@ -615,14 +624,14 @@ def main():
     print("=" * 60)
     
     thematic = results.get("thematic_analysis", {})
-    print(f"\nOverall Sentiment: {thematic.get('overall_sentiment', 'unknown').upper()}")
+    print(f"\nOverall News Assessment: {thematic.get('overall_news_assessment', thematic.get('overall_sentiment', 'unknown')).upper()}")
     print(f"Summary: {thematic.get('summary', 'N/A')}")
     
-    print("\nConviction Scores:")
+    print("\nFlags:")
     for symbol, analysis in results.get("symbol_analyses", {}).items():
-        conv = analysis.get("conviction", "?")
-        rec = analysis.get("recommendation", "?")
-        print(f"  {symbol}: {conv}/10 ({rec})")
+        flag = analysis.get("flag", "?")
+        drop = analysis.get("drop_assessment", "?")
+        print(f"  {symbol}: {flag} ({drop})")
     
     # Summary of all generated files
     print("\n" + "=" * 60)

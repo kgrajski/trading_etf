@@ -222,7 +222,7 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
-from src.analyst.tools.search import search_symbol_news
+from src.analyst.tools.search import search_symbol_news, search_market_overview, extract_sector_hints
 
 load_dotenv()
 
@@ -331,13 +331,14 @@ class AnalystState(TypedDict):
     candidates: List[Dict[str, Any]]
     
     # Intermediate
+    market_context: List[Dict[str, Any]]  # Broad market overview articles
     news_cache: Dict[str, List[Dict[str, Any]]]  # symbol -> news articles
     
     # Output - Initial Analysis
     thematic_analysis: Optional[Dict[str, Any]]
     symbol_analyses: Dict[str, Dict[str, Any]]  # symbol -> analysis
     
-    # Output - Reflection/Review (NEW)
+    # Output - Reflection/Review
     review_results: Optional[Dict[str, Any]]  # Reviewer's critique and adjustments
     
     # Metadata
@@ -518,6 +519,8 @@ def load_candidates(state: AnalystState) -> AnalystState:
         from src.analyst.instrumentation import get_instrumenter
         inst = get_instrumenter()
         with inst.track_node("load"):
+            if not state.get("market_context"):
+                state["market_context"] = []
             if not state.get("news_cache"):
                 state["news_cache"] = {}
             if not state.get("symbol_analyses"):
@@ -525,6 +528,8 @@ def load_candidates(state: AnalystState) -> AnalystState:
             if not state.get("errors"):
                 state["errors"] = []
     except ImportError:
+        if not state.get("market_context"):
+            state["market_context"] = []
         if not state.get("news_cache"):
             state["news_cache"] = {}
         if not state.get("symbol_analyses"):
@@ -548,6 +553,26 @@ def fetch_news(state: AnalystState) -> AnalystState:
         inst = None
         node_context = None
     
+    # Step 1: Broad market overview (catches macro events per-symbol searches miss)
+    print("  Fetching market overview...")
+    import time as _time
+    
+    sector_hints = extract_sector_hints(state["candidates"])
+    overview_start = _time.time()
+    state["market_context"] = search_market_overview(sector_hints)
+    overview_ms = (_time.time() - overview_start) * 1000
+    
+    print(f"    Market overview: {len(state['market_context'])} articles ({overview_ms:.0f}ms)")
+    if inst:
+        inst.record_tool_call(
+            tool="tavily_market_overview",
+            duration_ms=overview_ms,
+            success=len(state["market_context"]) > 0,
+            result_size=len(state["market_context"]),
+            node="fetch_news",
+        )
+    
+    # Step 2: Per-symbol news
     print("  Fetching news for symbols...")
     
     for candidate in state["candidates"]:
@@ -584,7 +609,7 @@ def fetch_news(state: AnalystState) -> AnalystState:
 
 
 def analyze_themes(state: AnalystState) -> AnalystState:
-    """Identify thematic patterns across candidates."""
+    """Identify thematic patterns across candidates using the premium model."""
     # Track node execution
     try:
         from src.analyst.instrumentation import get_instrumenter
@@ -597,7 +622,8 @@ def analyze_themes(state: AnalystState) -> AnalystState:
     
     print("  Analyzing themes...")
     
-    llm = get_llm()
+    # Use reviewer (premium) model for synthesis — this is where reasoning quality matters most
+    llm = get_llm("reviewer")
     
     # Build context
     candidates_summary = []
@@ -607,53 +633,70 @@ def analyze_themes(state: AnalystState) -> AnalystState:
         ret = c.get("pct_return", 0)
         candidates_summary.append(f"- {symbol}: {name} (return: {ret:.1f}%)")
     
-    # Get sample news
-    news_summary = []
-    for symbol, articles in list(state["news_cache"].items())[:5]:
-        for article in articles[:2]:
-            if "error" not in article:
-                news_summary.append(f"[{symbol}] {article.get('title', '')}")
+    # Market overview context (broad macro stories)
+    market_context_text = []
+    for article in state.get("market_context", []):
+        if "error" not in article:
+            title = article.get('title', '')
+            content = article.get('content', '')[:400]
+            market_context_text.append(f"• {title}\n  {content}")
     
-    prompt = f"""You are a NEWS ANALYST for an ETF trading desk. Your job is purely QUALITATIVE — to interpret recent news, NOT to analyze quantitative metrics.
+    # Per-symbol news (feed ALL to theme analysis)
+    news_summary = []
+    for symbol, articles in state["news_cache"].items():
+        for article in articles:
+            if "error" not in article:
+                title = article.get('title', '')
+                content = article.get('content', '')[:300]
+                news_summary.append(f"[{symbol}] {title}\n  {content}")
+    
+    prompt = f"""You are a SENIOR FINANCIAL ANALYST writing a market intelligence brief for an ETF trading desk. Your analysis must be specific, evidence-based, and cite concrete market mechanisms — not generic commentary.
 
-CONTEXT: These ETFs have been selected by our quantitative system as mean-reversion candidates (they dropped significantly this week). Our strategy holds positions for 1-3 weeks, targeting a bounce.
-
-Your task is to assess the NEWS LANDSCAPE — specifically, whether the news suggests these drops are:
-- TRANSIENT (sentiment-driven, profit-taking, overreaction to minor news) → likely to revert
-- STRUCTURAL (regulatory change, sector rotation, fundamental shift) → may not revert quickly
+CONTEXT: These ETFs dropped significantly this week and are mean-reversion candidates (our quant system targets a 1-3 week bounce). Your job: explain WHY they dropped using specific market mechanics, and assess whether those drivers are transient or structural.
 
 CANDIDATES:
 {chr(10).join(candidates_summary)}
 
-RECENT NEWS HEADLINES:
-{chr(10).join(news_summary) if news_summary else "No news available"}
+=== BROAD MARKET CONTEXT (this week's major market-moving events) ===
+{chr(10).join(market_context_text) if market_context_text else "No broad market context available"}
 
-ANALYSIS TASK:
-1. Group these ETFs into 2-4 themes based on what's in the NEWS (not sector classification)
-2. For each theme, assess: Is the news driving these drops TRANSIENT or STRUCTURAL?
-3. Identify any upcoming qualitative catalysts (Fed meetings, policy announcements, geopolitical events) that could affect recovery in the next 1-3 weeks
+=== PER-SYMBOL NEWS ===
+{chr(10).join(news_summary) if news_summary else "No per-symbol news available"}
 
-DO NOT comment on quantitative metrics (volatility, beta, etc.) — that's handled by our quant system.
+ANALYTICAL FRAMEWORK — For each theme, evaluate relevance of these dimensions:
+
+1. TECHNICAL FACTORS: Did the sector break below key moving averages (50-day, 200-day)? Support levels breached?
+2. RATE / YIELD CURVE: Is a flattening yield curve compressing bank NIMs? Are rate expectations shifting?
+3. CREDIT / FUNDAMENTALS: Emerging credit concerns, CRE exposure, delinquencies, earnings misses?
+4. REGULATORY / LEGAL: Specific lawsuits, enforcement actions, new regulations?
+5. MACRO / GEOPOLITICAL: Fed policy signals, inflation data, trade tensions, geopolitical events?
+6. SECTOR ROTATION: Money flowing out of this sector — into what, and why?
+7. MARKET-WIDE EVENTS: Major technology shifts, pandemic effects, or other cross-sector shocks?
+
+For each theme, cite which dimensions are relevant and provide evidence from the news above.
+If a dimension is NOT relevant, do not mention it.
+If the news does NOT support a claim, do not fabricate one — say evidence is limited.
 
 Respond in JSON format:
 {{
     "themes": [
         {{
-            "name": "Theme Name",
+            "name": "Descriptive Theme Name",
             "symbols": ["SYM1", "SYM2"],
-            "news_driver": "What news/event caused these drops",
+            "news_driver": "Specific market mechanism with evidence from news (e.g., 'Visa antitrust lawsuit triggered $1.2B settlement concerns across financial services')",
             "drop_type": "transient/structural/unclear",
-            "narrative": "2-3 sentences on whether news suggests this will revert in 1-3 weeks"
+            "relevant_dimensions": ["technical", "rates", "regulatory"],
+            "narrative": "3-4 sentences: what specific mechanism drove these drops, why it matters, and whether the evidence suggests recovery in 1-3 weeks"
         }}
     ],
-    "upcoming_catalysts": ["catalyst1", "catalyst2"],
+    "upcoming_catalysts": ["Specific dated catalyst (e.g., 'FOMC meeting March 18-19')", "catalyst2"],
     "overall_news_assessment": "favorable/mixed/unfavorable",
-    "summary": "2-3 sentence summary focused on NEWS interpretation, not quant factors"
+    "summary": "3-4 sentence executive summary. A reader should learn specific market conditions, not 'mixed signals across sectors.'"
 }}
 """
 
     try:
-        content = invoke_llm_with_tracking(llm, prompt, node="analyze_themes")
+        content = invoke_llm_with_tracking(llm, prompt, node="analyze_themes", role="reviewer")
         
         # Parse JSON from response
         if "```json" in content:
@@ -701,54 +744,75 @@ def analyze_symbols(state: AnalystState) -> AnalystState:
         sigma = candidate.get("sigma", None)
         beta = candidate.get("beta", None)
         
-        # Get news for this symbol
+        # Build market context summary for injection
+        market_ctx = state.get("market_context", [])
+        market_ctx_text = ""
+        if market_ctx:
+            market_lines = []
+            for article in market_ctx[:5]:
+                if "error" not in article:
+                    market_lines.append(f"• {article.get('title', '')}: {article.get('content', '')[:200]}")
+            market_ctx_text = chr(10).join(market_lines)
+        
+        # Get news for this symbol (include content, not just titles)
         news = state["news_cache"].get(symbol, [])
         news_text = ""
         citations = []
         for article in news:
             if "error" not in article:
-                news_text += f"- {article.get('title', '')}\n"
+                title = article.get('title', '')
+                content = article.get('content', '')[:400]
+                news_text += f"- {title}\n  {content}\n\n"
                 citations.append({
-                    "title": article.get("title", ""),
+                    "title": title,
                     "url": article.get("url", "")
                 })
         
-        prompt = f"""You are a NEWS ANALYST providing a QUALITATIVE assessment for a trade candidate.
+        prompt = f"""You are a FINANCIAL ANALYST assessing whether a specific ETF's decline will reverse within 1-3 weeks.
 
 SYMBOL: {symbol}
 NAME: {name}
-WEEKLY RETURN: {ret:.2f}% (this is why our quant system flagged it as a mean-reversion candidate)
+WEEKLY RETURN: {ret:.2f}%
 
-RECENT NEWS FOR THIS SYMBOL:
-{news_text if news_text else "No recent news found"}
+=== BROAD MARKET CONTEXT THIS WEEK ===
+{market_ctx_text if market_ctx_text else "No broad market context available"}
 
-CONTEXT: 
-- Our quantitative system has ALREADY selected this as a trade candidate based on metrics
-- We hold positions for 1-3 weeks, targeting a price bounce
-- Your job is to assess the NEWS only — is there anything in the news that suggests this drop WON'T revert?
+=== NEWS SPECIFIC TO {symbol} ===
+{news_text if news_text else "No symbol-specific news found."}
 
-QUALITATIVE ASSESSMENT TASK:
-Based ONLY on the news (not on price, volatility, or other quant factors):
+IMPORTANT RULES:
+- ONLY cite information that is actually in the news above. Do NOT fabricate claims.
+- If the news above does not explain this ETF's decline, say so honestly and set evidence_quality to "weak" or "none".
+- Check that the news is actually ABOUT this ETF or its sector — ignore unrelated articles.
+- Use the broad market context to identify macro factors (technology shifts, rate changes, sector rotation) that may have affected this ETF even if not mentioned in symbol-specific news.
 
-1. What caused this drop according to the news?
-2. Is the news TRANSIENT (overreaction, sentiment) or STRUCTURAL (fundamental change)?
-3. Are there any RED FLAGS in the news that suggest avoiding this trade?
+STRUCTURED ANALYSIS — evaluate each dimension's relevance to this ETF's decline:
+1. TECHNICAL: Break below key MAs, support levels, technical patterns?
+2. RATES / YIELD CURVE: Rate environment impact on this sector (NIM compression, duration risk)?
+3. CREDIT / FUNDAMENTALS: Earnings, credit quality, balance sheet concerns?
+4. REGULATORY / LEGAL: Lawsuits, enforcement, policy changes affecting this sector?
+5. MACRO / GEOPOLITICAL: Fed signals, trade tensions, geopolitical events?
+6. SECTOR ROTATION: Flows out of this sector, into what?
+7. MARKET-WIDE EVENTS: Major technology shifts, disruptive innovations, or cross-sector shocks?
 
 Respond in JSON format:
 {{
     "flag": "GREEN/YELLOW/RED",
-    "flag_reason": "One sentence explaining the flag",
-    "news_summary": "What the news says caused this drop",
+    "flag_reason": "One specific sentence citing evidence from the news above",
+    "news_summary": "2-3 sentences on the specific mechanism(s) driving this drop, citing only what the news actually says",
     "drop_assessment": "transient/structural/unclear",
-    "bullish_signals": ["news item suggesting bounce"],
-    "bearish_signals": ["news item suggesting continued decline"],
-    "key_concern": "Single biggest qualitative concern, or 'none' if GREEN"
+    "relevant_dimensions": ["List which of the 7 dimensions above are relevant, e.g. 'rates', 'regulatory'"],
+    "bullish_signals": ["Specific evidence from news suggesting recovery"],
+    "bearish_signals": ["Specific evidence from news suggesting continued decline"],
+    "key_concern": "Single most important risk factor from the evidence — or 'none' if GREEN",
+    "evidence_quality": "strong/moderate/weak/none"
 }}
 
 FLAG GUIDELINES:
-- GREEN: News suggests drop is overdone/transient, no red flags
-- YELLOW: Mixed signals, some concerns but not disqualifying  
-- RED: News suggests structural issue or ongoing catalyst — consider skipping this trade
+- GREEN: Evidence points to transient drop. No structural headwinds. evidence_quality should be moderate or strong.
+- YELLOW: Mixed or insufficient evidence. Some concerns but recovery plausible.
+- RED: Evidence of structural headwind. Bounce unlikely in 1-3 weeks.
+- If evidence_quality is "none", flag MUST be YELLOW (we don't have enough information to judge).
 """
         
         try:
@@ -1242,10 +1306,11 @@ def analyze_candidates(
     # Initialize state
     initial_state: AnalystState = {
         "candidates": candidates,
+        "market_context": [],
         "news_cache": {},
         "thematic_analysis": None,
         "symbol_analyses": {},
-        "review_results": None,  # Will be populated by reflection node
+        "review_results": None,
         "errors": [],
     }
     

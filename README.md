@@ -130,7 +130,6 @@ trading_etf/
 ├── requirements.txt
 ├── RESEARCH_LOG.md                  # Research journey narrative
 ├── CODING_STANDARDS.md
-├── CONTEXT.md
 └── SETUP.md
 ```
 

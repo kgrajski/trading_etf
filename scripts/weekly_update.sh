@@ -106,12 +106,40 @@ echo "==========================================================================
 python src/workflow/pipeline/05-build-feature-matrix.py
 echo
 
-# Step 7: Generate trade candidates
+# Step 7: Generate trade candidates (pre-production)
 echo "============================================================================="
-echo " Step 7: Generate Trade Candidates"
+echo " Step 7: Generate Trade Candidates (pre-production)"
 echo "============================================================================="
 python src/workflow/pipeline/21b-gen-new-trades.py
 echo
+
+# Step 8: Research trade candidates with AI-enriched dashboard (19.3)
+echo "============================================================================="
+echo " Step 8a: Generate Research Trade Candidates"
+echo "============================================================================="
+python src/workflow/research/19.3-gen-trades.py
+echo
+
+# Find today's candidates CSV for the AI analyst
+TODAY=$(date +%Y-%m-%d)
+CANDIDATES_CSV="experiments/exp019_3_trades/${TODAY}/candidates.csv"
+
+if [ -f "${CANDIDATES_CSV}" ]; then
+    echo "============================================================================="
+    echo " Step 8b: Run AI Analyst on Research Candidates"
+    echo "============================================================================="
+    python -m src.analyst.run "${CANDIDATES_CSV}" || echo -e "${YELLOW}  AI analyst failed (non-fatal) — continuing without AI enrichment${NC}"
+    echo
+
+    echo "============================================================================="
+    echo " Step 8c: Rebuild Research Dashboard with AI Analysis"
+    echo "============================================================================="
+    python src/workflow/research/19.3-gen-trades.py
+    echo
+else
+    echo -e "${YELLOW}  No candidates generated — skipping AI analyst${NC}"
+    echo
+fi
 
 # Done
 echo "============================================================================="
