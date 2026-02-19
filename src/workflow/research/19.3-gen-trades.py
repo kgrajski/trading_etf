@@ -459,22 +459,23 @@ def create_inspector(
     for _, t in candidates.iterrows():
         symbol = t["symbol"]
         color = "negative" if t["pct_return"] < 0 else "positive"
-        badge = str(t.get("risk_badge", "")) if pd.notna(t.get("risk_badge")) else ""
         
-        # Add AI flag badge if available
+        # AI flag badge as its own column (leftmost for scan-and-click)
         ai_data = symbol_analyses.get(symbol, {})
         flag = ai_data.get("flag")
         if flag is not None:
             if symbol in strongest:
-                badge += f' <span class="ai-badge top">⭐{flag}</span>'
+                flag_cell = f'<span class="ai-badge high" title="Strongest candidate (reviewer)">⭐</span>'
             elif symbol in weakest:
-                badge += f' <span class="ai-badge avoid">⚠{flag}</span>'
+                flag_cell = f'<span class="ai-badge low" title="Weakest / avoid (reviewer)">⚠</span>'
             elif flag == "GREEN":
-                badge += f' <span class="ai-badge high">{flag}</span>'
+                flag_cell = f'<span class="ai-badge high" title="GREEN: Transient drop, recovery likely">G</span>'
             elif flag == "RED":
-                badge += f' <span class="ai-badge low">{flag}</span>'
+                flag_cell = f'<span class="ai-badge low" title="RED: Structural headwind, avoid">R</span>'
             else:
-                badge += f' <span class="ai-badge">{flag}</span>'
+                flag_cell = f'<span class="ai-badge medium" title="YELLOW: Mixed or insufficient evidence">Y</span>'
+        else:
+            flag_cell = '<span class="ai-badge" style="background:#ddd;color:#999" title="No AI analysis available">—</span>'
         
         # Build tooltip with vol stats
         sigma = t.get("sigma", np.nan)
@@ -492,8 +493,9 @@ def create_inspector(
         
         rows_html.append(f"""
         <tr onclick="loadChart('{symbol}')" class="clickable" title="{tooltip}" data-symbol="{symbol}">
-            <td><strong>{symbol}</strong> {badge}</td>
-            <td>{str(t.get('etf_name', ''))[:22]}</td>
+            <td class="flag-col">{flag_cell}</td>
+            <td><strong>{symbol}</strong></td>
+            <td class="name-col" title="{str(t.get('etf_name', ''))}">{str(t.get('etf_name', ''))}</td>
             <td class="{color}">{t['pct_return']:.1f}%</td>
             <td><strong>{t['shares']}</strong></td>
             <td>${t['limit_price']:.2f}</td>
@@ -557,11 +559,14 @@ def create_inspector(
         .ai-sentiment.unknown {{ background: #6c757d; }}
         
         /* AI Badge Styles */
-        .ai-badge {{ display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: bold; margin-left: 4px; background: #6c757d; color: white; }}
+        .ai-badge {{ display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: bold; background: #6c757d; color: white; text-align: center; min-width: 20px; }}
         .ai-badge.high {{ background: #28A745; }}
+        .ai-badge.medium {{ background: #FFC107; color: #333; }}
         .ai-badge.low {{ background: #DC3545; }}
         .ai-badge.top {{ background: #FFD700; color: #333; }}
         .ai-badge.avoid {{ background: #DC3545; }}
+        .flag-col {{ width: 28px; min-width: 28px; max-width: 28px; padding: 4px 2px !important; text-align: center; }}
+        .name-col {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }}
         
         /* Modal Styles */
         .modal {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }}
@@ -598,15 +603,15 @@ def create_inspector(
         
         /* Main Layout */
         .container {{ display: flex; gap: 14px; height: calc(100vh - 60px); }}
-        .sidebar {{ width: 560px; flex-shrink: 0; background: white; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); overflow: hidden; display: flex; flex-direction: column; }}
+        .sidebar {{ width: 660px; flex-shrink: 0; background: white; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); overflow: hidden; display: flex; flex-direction: column; }}
         .sidebar-header {{ padding: 8px 12px; background: #2E86AB; color: white; font-weight: bold; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }}
         .ai-toggle {{ background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4); color: white; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }}
         .ai-toggle:hover {{ background: rgba(255,255,255,0.3); }}
         .ai-toggle.active {{ background: #667eea; border-color: #667eea; }}
         .table-container {{ overflow-y: auto; flex: 1; }}
         table {{ width: 100%; border-collapse: collapse; }}
-        th {{ background: #f0f0f0; padding: 8px 8px; text-align: left; font-size: 13px; font-weight: 600; position: sticky; top: 0; z-index: 1; border-bottom: 2px solid #ddd; }}
-        td {{ padding: 8px 8px; border-bottom: 1px solid #eee; font-size: 14px; }}
+        th {{ background: #f0f0f0; padding: 6px 6px; text-align: left; font-size: 12px; font-weight: 600; position: sticky; top: 0; z-index: 1; border-bottom: 2px solid #ddd; white-space: nowrap; }}
+        td {{ padding: 6px 6px; border-bottom: 1px solid #eee; font-size: 13px; white-space: nowrap; }}
         tr.clickable {{ cursor: pointer; }}
         tr.clickable:hover {{ background: #e8f4f8; }}
         tr.clickable:nth-child(even) {{ background: #fafafa; }}
@@ -632,13 +637,14 @@ def create_inspector(
     <div class="container">
         <div class="sidebar">
             <div class="sidebar-header">
-                <span>Click symbol to view chart (↑↓ nav) | 🔥σ>{HIGH_VOLATILITY_THRESHOLD}% ⚡β>{HIGH_BETA_THRESHOLD}</span>
+                <span>Click symbol to view chart (↑↓ nav) | <span title="σ (sigma) = weekly return volatility. Values above {HIGH_VOLATILITY_THRESHOLD}% indicate unusually high price swings — wider stops may be needed." style="cursor:help">🔥σ&gt;{HIGH_VOLATILITY_THRESHOLD}%</span> <span title="β (beta) = sensitivity to market (SPY) moves. β&gt;{HIGH_BETA_THRESHOLD} means this ETF amplifies market swings — drops harder in sell-offs, bounces harder in rallies." style="cursor:help">⚡β&gt;{HIGH_BETA_THRESHOLD}</span></span>
                 {f'<button class="ai-toggle" id="aiToggle" onclick="toggleAIOverlay()" title="Toggle AI insights">🤖 AI</button>' if has_ai else ''}
             </div>
             <div class="table-container">
                 <table>
                     <thead>
                         <tr>
+                            <th class="flag-col" title="AI Flag: G=GREEN (transient drop, buy), Y=YELLOW (mixed/unclear), R=RED (structural, avoid), ⭐=Strongest pick, ⚠=Weakest/avoid" style="cursor:help">⚑</th>
                             <th>Symbol</th>
                             <th>Name</th>
                             <th>Ret</th>
